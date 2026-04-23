@@ -4,8 +4,7 @@ import { MongoMemoryStore } from '../../src/store'
 import { mockEmbedder } from './mock-embedder'
 
 export const ATLAS_URI =
-  process.env.MONGODB_URI ??
-  'mongodb+srv://adminIUser:adminIUser@ilcluster.wagfu.mongodb.net/agent_memory_vercel'
+  process.env.MONGODB_URI 
 
 // Fixed DB name — reused across runs so vector search indexes persist.
 // Collections are dropped in teardown to ensure a clean state each run.
