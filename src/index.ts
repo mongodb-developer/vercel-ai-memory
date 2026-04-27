@@ -1,8 +1,15 @@
 import { MongoClient } from 'mongodb'
+import type { ModelMessage } from '@ai-sdk/provider-utils'
 import { EmbeddingAdapter } from './embeddings'
 import { MongoMemoryStore } from './store'
 import { buildMemoryTool } from './tool'
 import { resolveConfig } from './config'
+import {
+  loadSession as loadSessionImpl,
+  createOnFinish as createOnFinishImpl,
+  type SessionHookOptions,
+  type OnFinishCallback,
+} from './session-hooks'
 import type {
   MongoDBMemoryOptions,
   MemoryCallOptions,
@@ -10,6 +17,8 @@ import type {
 } from './types'
 
 export type { MongoDBMemoryOptions, MemoryCallOptions }
+export type { SessionHookOptions, OnFinishCallback }
+export { loadSession, createOnFinish } from './session-hooks'
 export type {
   UsageStats,
   SessionMemory,
@@ -74,6 +83,50 @@ export interface MongoDBMemoryInstance {
 
   /** Gracefully close the MongoDB connection */
   close(): Promise<void>
+
+  /**
+   * **Deterministic session read** — returns prior session turns as
+   * `ModelMessage[]`, ready to prepend to the next LLM call.
+   *
+   * Use this in `ToolLoopAgent.prepareCall` (or before `generateText`) so the
+   * agent always sees its conversation history, regardless of whether the LLM
+   * decides to call the `session_recent` tool.
+   *
+   * @example
+   * ```ts
+   * prepareCall: async ({ options, messages, ...settings }) => ({
+   *   ...settings,
+   *   tools:    mongodbMemory(options),
+   *   messages: [
+   *     ...(await mongodbMemory.loadSession(options!)),
+   *     ...(messages ?? []),
+   *   ],
+   * })
+   * ```
+   */
+  loadSession(opts: SessionHookOptions): Promise<ModelMessage[]>
+
+  /**
+   * **Deterministic session write** — returns an `onFinish` callback that
+   * persists every user / assistant / tool turn from a generation to session
+   * memory, exactly once. Pass the result to
+   * `ToolLoopAgent.onFinish`, `generateText({ onFinish })`, or
+   * `streamText({ onFinish })`.
+   *
+   * This removes the non-determinism of a tool-based session_append — every
+   * turn is captured, even if the LLM never touches memory tools.
+   *
+   * @example
+   * ```ts
+   * const result = await agent.generate({
+   *   prompt,
+   *   onFinish: mongodbMemory.onFinish({ userId, sessionId, prompt }),
+   * })
+   * ```
+   */
+  onFinish(
+    opts?: Partial<SessionHookOptions> & { prompt?: string | ModelMessage[] }
+  ): OnFinishCallback
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -152,6 +205,28 @@ export function createMongoDBMemory(options: MongoDBMemoryOptions): MongoDBMemor
     await client.close()
     bootstrapped = false
     bootstrapPromise = null
+  }
+
+  // ── Deterministic session hooks ─────────────────────────────────────────────
+  memoryInstance.loadSession = async (opts: SessionHookOptions) => {
+    await ensureConnected()
+    return loadSessionImpl(store, {
+      limit: config.defaults.sessionRecentLimit,
+      ...opts,
+    })
+  }
+
+  memoryInstance.onFinish = (
+    opts?: Partial<SessionHookOptions> & { prompt?: string | ModelMessage[] }
+  ): OnFinishCallback => {
+    const base = createOnFinishImpl(store, opts)
+    // Wrap so we ensure the DB is connected before writing. Store methods also
+    // work post-connect, but this keeps behavior consistent with the tool's
+    // lazy bootstrap path.
+    return async (event) => {
+      await ensureConnected()
+      return base(event)
+    }
   }
 
   return memoryInstance as MongoDBMemoryInstance

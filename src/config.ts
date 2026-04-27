@@ -84,6 +84,12 @@ export function resolveConfig(options: MongoDBMemoryOptions): MemoryConfig {
   }
 
   const disabled = new Set<MemoryType>(options.topology?.disable ?? [])
+  // hiddenFromTool is always a superset of disabled — a fully disabled type
+  // is of course also absent from the tool schema.
+  const hiddenFromTool = new Set<MemoryType>([
+    ...disabled,
+    ...(options.topology?.hideToolCommands ?? []),
+  ])
 
   const extraFilterFields: Record<VectorMemoryType, string[]> = {
     semantic: options.topology?.extraFilterFields?.semantic ?? [],
@@ -131,6 +137,16 @@ export function resolveConfig(options: MongoDBMemoryOptions): MemoryConfig {
         `not be bootstrapped.`
     )
   }
+  // Separate, quieter notice for types that are live-but-hidden from the tool.
+  for (const t of hiddenFromTool) {
+    if (disabled.has(t)) continue
+    // eslint-disable-next-line no-console
+    console.info(
+      `[mongodb-memory] Memory type "${t}" is hidden from the tool schema ` +
+        `but its store and collection remain active (expected when using ` +
+        `runtime hooks).`
+    )
+  }
 
   return {
     dbName,
@@ -139,6 +155,7 @@ export function resolveConfig(options: MongoDBMemoryOptions): MemoryConfig {
     collections,
     vectorIndexNames,
     disabled,
+    hiddenFromTool,
     extraFilterFields,
     retention,
     filtering,

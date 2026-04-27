@@ -217,9 +217,11 @@ export function buildMemoryTool(
   onBeforeExecute?: () => Promise<void>,
   config?: MemoryConfig
 ) {
-  const disabled = config?.disabled ?? new Set<MemoryType>()
-  const schema = buildSchema(disabled)
-  const description = buildDescription(disabled)
+  // Commands are hidden from the tool when the type is either fully disabled
+  // OR when the caller asked to hide-but-keep-live (hookdriven session, etc.).
+  const hidden = config?.hiddenFromTool ?? config?.disabled ?? new Set<MemoryType>()
+  const schema = buildSchema(hidden)
+  const description = buildDescription(hidden)
 
   return tool({
     description,
