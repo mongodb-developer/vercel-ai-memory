@@ -261,10 +261,27 @@ export interface TopologyOptions {
   /** Override vector search index names. */
   vectorIndexNames?: Partial<Record<VectorMemoryType, string>>
   /**
-   * Disable a memory type entirely — it will not be bootstrapped and its
-   * tool commands will be removed from the tool schema.
+   * Disable a memory type entirely — it will not be bootstrapped **and** its
+   * tool commands will be removed from the tool schema **and** the underlying
+   * store methods will throw. Use this when you genuinely don't want that
+   * memory type in your deployment.
+   *
+   * If you want to keep the store/collection live but just remove the tool
+   * commands from the LLM's surface (e.g. because you're persisting session
+   * memory via hooks instead), use {@link TopologyOptions.hideToolCommands}.
    */
   disable?: MemoryType[]
+  /**
+   * Remove a memory type's commands from the tool schema **without** disabling
+   * the store. The collection is still bootstrapped and the store methods
+   * (`sessionAppend`, etc.) continue to work — so you can drive that memory
+   * type from runtime hooks (`loadSession` / `onFinish`) instead of letting
+   * the LLM call it as a tool.
+   *
+   * Typical use: `hideToolCommands: ['session']` when using deterministic
+   * hook-based session memory.
+   */
+  hideToolCommands?: MemoryType[]
   /**
    * Extra scalar filter fields to index in the vector search index for a
    * given memory type (e.g. `['tenant_id']` for multi-tenant setups).
@@ -373,7 +390,14 @@ export interface MemoryConfig {
 
   collections: Record<MemoryType, string>
   vectorIndexNames: Record<VectorMemoryType, string>
+  /** Memory types that are fully off (no store, no bootstrap, no tool). */
   disabled: Set<MemoryType>
+  /**
+   * Memory types whose tool commands should be hidden from the LLM, but whose
+   * store + collection remain live (driven by runtime hooks instead).
+   * Always a superset of `disabled` from the tool's perspective.
+   */
+  hiddenFromTool: Set<MemoryType>
   extraFilterFields: Record<VectorMemoryType, string[]>
 
   retention: Required<{

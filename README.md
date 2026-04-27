@@ -54,6 +54,86 @@ const result = await agent.generate({
 
 `mongodbMemory({ userId, sessionId })` returns the tools record directly — no spreading needed.
 
+## Session memory: two modes
+
+The package exposes session (short-term conversation) memory in **two modes**, both backed by the same Mongo collection. Pick based on how much determinism you need — they can't be combined for the same session.
+
+### Mode A — Tool-driven (LLM-controlled)
+
+Shown in the Quick Start above. The LLM sees `memory` with `session_append` / `session_recent` commands and decides when to call them. This is the simplest setup but **not deterministic**: the model sometimes skips writes (only user or only assistant turns get persisted) or skips reads (agent forgets earlier turns).
+
+Use this for demos, prototypes, or agents where the LLM genuinely curates what belongs in the transcript.
+
+### Mode B — Hook-driven (runtime-controlled) ✅ recommended for production
+
+Hide the session tool commands from the LLM and let the runtime read/write the transcript on every turn via Vercel AI SDK hooks. Every user, assistant, and tool turn is captured **exactly once per generation**, regardless of what the LLM decides.
+
+```ts
+import { createMongoDBMemory } from '@mongodb-developer/vercel-ai-memory'
+import { openai } from '@ai-sdk/openai'
+import { ToolLoopAgent, stepCountIs } from 'ai'
+import { z } from 'zod'
+
+const mongodbMemory = createMongoDBMemory({
+  uri: process.env.MONGODB_URI!,
+  embedder: openai.embedding('text-embedding-3-small'),
+  // Hide session_append / session_recent from the LLM tool surface, but keep
+  // the session collection + store methods live for the runtime hooks below.
+  // (Use `disable: ['session']` instead if you want the collection entirely off.)
+  topology: { hideToolCommands: ['session'] },
+})
+
+const agent = new ToolLoopAgent({
+  model: openai('gpt-4o-mini'),
+
+  callOptionsSchema: z.object({
+    userId: z.string(),
+    sessionId: z.string(),
+    prompt: z.string(),
+  }),
+
+  // ── PRE hook: read history + scope onFinish ─────────────────────────────────
+  // Strip `prompt` / `messages` from the incoming settings — the AI SDK enforces
+  // `prompt` XOR `messages`, and we're replacing them with our restored history.
+  prepareCall: async ({ options, prompt: _p, messages: _m, ...settings }) => {
+    const { userId, sessionId, prompt } = options!
+    const history = await mongodbMemory.loadSession({ userId, sessionId })
+
+    return {
+      ...settings,
+      tools: mongodbMemory({ userId, sessionId }),
+      messages: [...history, { role: 'user', content: prompt }],
+      // per-call state flows to onFinish via experimental_context
+      experimental_context: { userId, sessionId, prompt },
+    }
+  },
+
+  // ── POST hook: write every turn exactly once ────────────────────────────────
+  onFinish: mongodbMemory.onFinish(),
+
+  stopWhen: stepCountIs(6),
+})
+
+// Usage
+await agent.generate({
+  prompt: 'Hi! My name is Alex.',
+  options: { userId: 'alice', sessionId: 'sess-001', prompt: 'Hi! My name is Alex.' },
+})
+```
+
+**What the hooks do:**
+
+| Hook | Method | When it runs | What it does |
+|------|--------|-------------|--------------|
+| Pre  | `mongodbMemory.loadSession({ userId, sessionId })` | Inside `prepareCall`, before every LLM call | Reads prior turns from Mongo, returns `ModelMessage[]` you prepend to `messages`. |
+| Post | `mongodbMemory.onFinish()` | After the full tool loop finishes | Persists the user prompt + every assistant & tool message across all steps. |
+
+**Why `experimental_context`?** `ToolLoopAgent` only accepts `onFinish` at construction time, but you still need per-call scope (`userId`, `sessionId`, `prompt`). The hook reads those from `event.experimental_context`, which you set inside `prepareCall`. You can also call `mongodbMemory.onFinish({ userId, sessionId, prompt })` with a baked-in closure when using one-shot `generateText` / `streamText`.
+
+See `examples/deterministic-agent.ts` for the full runnable example.
+
+> **Note:** The other memory tiers (semantic, procedural, episodic, scratchpad) are intentionally left under LLM control — they should be selective and content-dependent, not every-turn.
+
 ## Configuration
 
 All options are passed to `createMongoDBMemory(options)`.
@@ -79,7 +159,8 @@ All options are passed to `createMongoDBMemory(options)`.
 | `topology.dbName` | `string` | `'agent_memory'` | Database name (takes precedence over the legacy top-level `dbName`) |
 | `topology.collections` | `Partial<Record<MemoryType, string>>` | see **Collection defaults** below | Override collection names per memory type |
 | `topology.vectorIndexNames` | `Partial<Record<VectorMemoryType, string>>` | see **Index defaults** below | Override Atlas Vector Search index names |
-| `topology.disable` | `MemoryType[]` | `[]` | Disable memory types entirely — no bootstrap, commands removed from tool schema |
+| `topology.disable` | `MemoryType[]` | `[]` | Disable memory types entirely — no bootstrap, tool commands removed, store methods throw |
+| `topology.hideToolCommands` | `MemoryType[]` | `[]` | Hide a memory type's commands from the tool schema, but keep its collection + store methods live (use with runtime hooks) |
 | `topology.extraFilterFields` | `Partial<Record<VectorMemoryType, string[]>>` | `{}` | Extra scalar fields to index as Atlas Search filters (e.g. `['tenant_id']`) |
 
 **Collection defaults:**

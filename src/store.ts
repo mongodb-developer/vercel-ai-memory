@@ -83,6 +83,7 @@ export class MongoMemoryStore {
         episodic: 'episodic_vector_index',
       },
       disabled: new Set<MemoryType>(),
+      hiddenFromTool: new Set<MemoryType>(),
       extraFilterFields: { semantic: [], procedural: [], episodic: [] },
       retention: {
         session: { mode: 'ttl', ttlSeconds: 86_400, field: 'created_at' },
