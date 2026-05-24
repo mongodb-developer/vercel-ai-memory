@@ -28,6 +28,9 @@ pnpm add @mongodb-developer/vercel-ai-memory
 npm install ai mongodb zod
 ```
 
+This package targets **AI SDK v6** (`ai@^6.0.0`). The examples use v6 APIs such as
+`ToolLoopAgent` and `isLoopFinished()`.
+
 ## Quick Start
 
 ```ts
@@ -71,7 +74,7 @@ Hide the session tool commands from the LLM and let the runtime read/write the t
 ```ts
 import { createMongoDBMemory } from '@mongodb-developer/vercel-ai-memory'
 import { openai } from '@ai-sdk/openai'
-import { ToolLoopAgent, stepCountIs } from 'ai'
+import { ToolLoopAgent, isLoopFinished } from 'ai'
 import { z } from 'zod'
 
 const mongodbMemory = createMongoDBMemory({
@@ -111,7 +114,7 @@ const agent = new ToolLoopAgent({
   // ── POST hook: write every turn exactly once ────────────────────────────────
   onFinish: mongodbMemory.onFinish(),
 
-  stopWhen: stepCountIs(6),
+  stopWhen: isLoopFinished(),
 })
 
 // Usage
@@ -127,6 +130,11 @@ await agent.generate({
 |------|--------|-------------|--------------|
 | Pre  | `mongodbMemory.loadSession({ userId, sessionId })` | Inside `prepareCall`, before every LLM call | Reads prior turns from Mongo, returns `ModelMessage[]` you prepend to `messages`. |
 | Post | `mongodbMemory.onFinish()` | After the full tool loop finishes | Persists the user prompt + every assistant & tool message across all steps. |
+
+`loadSession()` restores user/assistant turns only. Tool turns remain stored in Mongo as
+transcript/audit records, but they are not replayed as provider `tool-result` blocks because
+OpenAI Responses and Anthropic Messages reject orphan tool results without the matching prior
+assistant tool call.
 
 **Why `experimental_context`?** `ToolLoopAgent` only accepts `onFinish` at construction time, but you still need per-call scope (`userId`, `sessionId`, `prompt`). The hook reads those from `event.experimental_context`, which you set inside `prepareCall`. You can also call `mongodbMemory.onFinish({ userId, sessionId, prompt })` with a baked-in closure when using one-shot `generateText` / `streamText`.
 

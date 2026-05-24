@@ -158,6 +158,7 @@ export function resolveConfig(options: MongoDBMemoryOptions): MemoryConfig {
     hiddenFromTool,
     extraFilterFields,
     retention,
+    keepHistory: options.topology?.keepHistory ?? false,
     filtering,
     defaults,
   }

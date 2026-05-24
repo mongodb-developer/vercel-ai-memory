@@ -14,6 +14,13 @@ import type {
   DecayInput,
 } from './types'
 
+export type SessionAppendInput = {
+  role: SessionMemory['role']
+  content: string
+  toolName?: string
+  tokenCount?: number
+}
+
 // ─── Names ────────────────────────────────────────────────────────────────────
 // The default collection/index names are defined in src/config.ts — we only
 // reference them indirectly through the resolved MemoryConfig here.
@@ -92,6 +99,7 @@ export class MongoMemoryStore {
         semantic: { mode: 'none' },
         procedural: { mode: 'none' },
       },
+      keepHistory: false,
       filtering: { minImportance: 0, recencyWindowHours: 0, numCandidatesMultiplier: 10 },
       defaults: { importance: 5, sessionRecentLimit: 40, searchLimit: 5, similarity: 'cosine' },
     }
@@ -127,6 +135,10 @@ export class MongoMemoryStore {
     if (this._enabled('session')) {
       await this._applyDecayIndex(asDoc(this.session), 'session', this.config.retention.session)
       await this._ensureExpireAtIndex(asDoc(this.session))
+      await this.session.createIndex(
+        { session_id: 1, seq: 1 },
+        { unique: true, background: true, name: 'session_seq_unique' }
+      )
       await this.session.createIndex({ session_id: 1, seq: -1 }, { background: true })
       await this.session.createIndex({ session_id: 1, role: 1 }, { background: true })
     }
@@ -142,6 +154,15 @@ export class MongoMemoryStore {
       await this._ensureExpireAtIndex(asDoc(this.semantic))
       await this.semantic.createIndex({ user_id: 1, name: 1, timestamp: -1 }, { background: true })
       await this.semantic.createIndex({ user_id: 1, category: 1 }, { background: true })
+      await this.semantic.createIndex(
+        { user_id: 1, name: 1, is_latest: 1 },
+        {
+          unique: true,
+          background: true,
+          name: 'semantic_latest_unique',
+          partialFilterExpression: { is_latest: true },
+        }
+      )
     }
 
     if (this._enabled('procedural')) {
@@ -149,6 +170,15 @@ export class MongoMemoryStore {
       await this._ensureExpireAtIndex(asDoc(this.procedural))
       await this.procedural.createIndex({ user_id: 1, category: 1 }, { background: true })
       await this.procedural.createIndex({ task: 1 }, { background: true })
+      await this.procedural.createIndex(
+        { user_id: 1, task: 1, is_latest: 1 },
+        {
+          unique: true,
+          background: true,
+          name: 'procedural_latest_unique',
+          partialFilterExpression: { is_latest: true },
+        }
+      )
     }
 
     if (this._enabled('episodic')) {
@@ -308,14 +338,29 @@ export class MongoMemoryStore {
     content: string,
     opts?: { toolName?: string; tokenCount?: number }
   ): Promise<void> {
+    await this.sessionAppendMany(userId, sessionId, [{
+      role,
+      content,
+      toolName: opts?.toolName,
+      tokenCount: opts?.tokenCount,
+    }])
+  }
+
+  async sessionAppendMany(
+    userId: string,
+    sessionId: string,
+    turns: SessionAppendInput[]
+  ): Promise<void> {
     if (!this._enabled('session')) {
       throw new Error('[mongodb-memory] Session memory is disabled')
     }
+    if (turns.length === 0) return
+
     // Get next seq number
     const last = await this.session
       .find({ session_id: sessionId }, { projection: { seq: 1 }, sort: { seq: -1 }, limit: 1 })
       .toArray()
-    const seq = last.length > 0 ? last[0].seq + 1 : 0
+    const baseSeq = last.length > 0 ? last[0].seq + 1 : 0
 
     const createdAt = new Date()
     const expireAt = this._computeExpireAtFor('session', {
@@ -323,18 +368,21 @@ export class MongoMemoryStore {
       createdAt,
     })
 
-    await this.session.insertOne({
-      _id: new ObjectId(),
-      session_id: sessionId,
-      user_id: userId,
-      seq,
-      role,
-      content,
-      tool_name: opts?.toolName,
-      token_count: opts?.tokenCount,
-      created_at: createdAt,
-      ...(expireAt ? { expire_at: expireAt } : {}),
-    })
+    await this.session.insertMany(
+      turns.map((turn, i) => ({
+        _id: new ObjectId(),
+        session_id: sessionId,
+        user_id: userId,
+        seq: baseSeq + i,
+        role: turn.role,
+        content: turn.content,
+        tool_name: turn.toolName,
+        token_count: turn.tokenCount,
+        created_at: createdAt,
+        ...(expireAt ? { expire_at: expireAt } : {}),
+      })),
+      { ordered: true }
+    )
   }
 
   async sessionRecent(sessionId: string, limit = this.config.defaults.sessionRecentLimit): Promise<SessionMemory[]> {
@@ -363,31 +411,57 @@ export class MongoMemoryStore {
     const now = new Date()
     const importance = opts?.importance ?? this.config.defaults.importance
 
-    // Mark old versions as not-latest
-    await this.semantic.updateMany(
-      { user_id: userId, name },
-      { $set: { is_latest: false } }
-    )
-
     const expireAt = this._computeExpireAtFor('semantic', {
       importance,
       createdAt: now,
     })
 
-    await this.semantic.insertOne({
-      _id: new ObjectId(),
-      user_id: userId,
-      name,
-      category: 'semantic',
-      description,
-      embedding,
-      importance,
-      stats: defaultStats(),
-      timestamp: now,
-      is_latest: true,
-      tags: opts?.tags,
-      ...(expireAt ? { expire_at: expireAt } : {}),
-    })
+    if (this.config.keepHistory) {
+      // Temporal versioning: mark old docs not-latest, then insert a new one.
+      await this.semantic.updateMany(
+        { user_id: userId, name },
+        { $set: { is_latest: false } }
+      )
+
+      await this.semantic.insertOne({
+        _id: new ObjectId(),
+        user_id: userId,
+        name,
+        category: 'semantic',
+        description,
+        embedding,
+        importance,
+        stats: defaultStats(),
+        timestamp: now,
+        is_latest: true,
+        tags: opts?.tags,
+        ...(expireAt ? { expire_at: expireAt } : {}),
+      })
+    } else {
+      // In-place upsert: single document per (user_id, name).
+      await this.semantic.updateOne(
+        { user_id: userId, name },
+        {
+          $set: {
+            description,
+            embedding,
+            importance,
+            timestamp: now,
+            is_latest: true,
+            tags: opts?.tags,
+            ...(expireAt ? { expire_at: expireAt } : {}),
+          },
+          $setOnInsert: {
+            _id: new ObjectId(),
+            user_id: userId,
+            name,
+            category: 'semantic' as const,
+            stats: defaultStats(),
+          },
+        },
+        { upsert: true }
+      )
+    }
   }
 
   async semanticSearch(
@@ -437,32 +511,59 @@ export class MongoMemoryStore {
     const embedding = await this.embedder.embedText(`${task}: ${description}`)
     const now = new Date()
     const importance = opts?.importance ?? this.config.defaults.importance
-
-    // Mark old versions as not-latest
-    await this.procedural.updateMany(
-      { user_id: userId, task },
-      { $set: { is_latest: false } }
-    )
+    const source = opts?.source ?? 'agent_learned'
 
     const expireAt = this._computeExpireAtFor('procedural', {
       importance,
       createdAt: now,
     })
 
-    await this.procedural.insertOne({
-      _id: new ObjectId(),
-      user_id: userId,
-      task,
-      category: 'procedural',
-      description,
-      embedding,
-      importance,
-      stats: defaultStats(),
-      source: opts?.source ?? 'agent_learned',
-      timestamp: now,
-      is_latest: true,
-      ...(expireAt ? { expire_at: expireAt } : {}),
-    })
+    if (this.config.keepHistory) {
+      // Temporal versioning: mark old docs not-latest, then insert a new one.
+      await this.procedural.updateMany(
+        { user_id: userId, task },
+        { $set: { is_latest: false } }
+      )
+
+      await this.procedural.insertOne({
+        _id: new ObjectId(),
+        user_id: userId,
+        task,
+        category: 'procedural',
+        description,
+        embedding,
+        importance,
+        stats: defaultStats(),
+        source,
+        timestamp: now,
+        is_latest: true,
+        ...(expireAt ? { expire_at: expireAt } : {}),
+      })
+    } else {
+      // In-place upsert: single document per (user_id, task).
+      await this.procedural.updateOne(
+        { user_id: userId, task },
+        {
+          $set: {
+            description,
+            embedding,
+            importance,
+            source,
+            timestamp: now,
+            is_latest: true,
+            ...(expireAt ? { expire_at: expireAt } : {}),
+          },
+          $setOnInsert: {
+            _id: new ObjectId(),
+            user_id: userId,
+            task,
+            category: 'procedural' as const,
+            stats: defaultStats(),
+          },
+        },
+        { upsert: true }
+      )
+    }
   }
 
   async proceduralSearch(

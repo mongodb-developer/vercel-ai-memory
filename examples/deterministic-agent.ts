@@ -23,7 +23,7 @@
 import { createMongoDBMemory } from '../src/index'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { openai } = require('@ai-sdk/openai')
-import { ToolLoopAgent, stepCountIs } from 'ai'
+import { ToolLoopAgent, isLoopFinished } from 'ai'
 import { z } from 'zod'
 
 // ── 1. Create the memory instance ONCE ────────────────────────────────────────
@@ -88,7 +88,7 @@ session_append or session_recent; they're not available. Respond naturally.`,
   // scoped per-call via experimental_context below.
   onFinish: mongodbMemory.onFinish(),
 
-  stopWhen: stepCountIs(6),
+  stopWhen: isLoopFinished(),
 })
 
 // ── 3. Chat helper — delegates to the agent ───────────────────────────────────

@@ -45,8 +45,8 @@ describe('ProceduralMemory', () => {
     }
   })
 
-  it('temporal versioning works for procedures', async () => {
-    const task = `Versioned-${Date.now()}`
+  it('in-place upsert: save twice with same task produces 1 doc (default keepHistory=false)', async () => {
+    const task = `Upsert-${Date.now()}`
     await store.proceduralSave(USER, task, 'Version 1 of the procedure')
     await store.proceduralSave(USER, task, 'Version 2 — improved')
 
@@ -55,11 +55,31 @@ describe('ProceduralMemory', () => {
     }).procedural
     if (col) {
       const docs = await col.find({ user_id: USER, task }).toArray()
-      const latest = docs.filter(d => d.is_latest)
-      const old = docs.filter(d => !d.is_latest)
-      expect(latest).toHaveLength(1)
-      expect(old).toHaveLength(1)
-      expect(latest[0].description).toBe('Version 2 — improved')
+      // Default mode: only 1 document (upserted in place)
+      expect(docs).toHaveLength(1)
+      expect(docs[0].is_latest).toBe(true)
+      expect(docs[0].description).toBe('Version 2 — improved')
+    }
+  })
+
+  it('upsert preserves stats from initial insert', async () => {
+    const task = `StatsPreserve-${Date.now()}`
+    await store.proceduralSave(USER, task, 'First save')
+
+    const col = (store as unknown as {
+      procedural: { findOne: (q: object) => Promise<{ stats: { retrieval_ct: number } } | null> }
+    }).procedural
+    if (col) {
+      const doc = await col.findOne({ user_id: USER, task, is_latest: true })
+      expect(doc?.stats.retrieval_ct).toBe(0)
+    }
+
+    // Second save should keep the original stats (via $setOnInsert not overwriting)
+    await store.proceduralSave(USER, task, 'Updated save')
+
+    if (col) {
+      const doc = await col.findOne({ user_id: USER, task, is_latest: true })
+      expect(doc?.stats.retrieval_ct).toBe(0)
     }
   })
 })

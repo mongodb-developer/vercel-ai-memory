@@ -31,9 +31,11 @@ function makeTurn(
 function makeMockStore() {
   return {
     sessionAppend: vi.fn(async () => undefined),
+    sessionAppendMany: vi.fn(async () => undefined),
     sessionRecent: vi.fn(async () => [] as SessionMemory[]),
   } as unknown as MongoMemoryStore & {
     sessionAppend: ReturnType<typeof vi.fn>
+    sessionAppendMany: ReturnType<typeof vi.fn>
     sessionRecent: ReturnType<typeof vi.fn>
   }
 }
@@ -83,23 +85,20 @@ describe('loadSession', () => {
     expect(msgs[2]).toEqual({ role: 'user', content: 'how are you?' })
   })
 
-  it('maps tool turns to a tool ModelMessage with tool-result part', async () => {
+  it('drops tool turns instead of restoring orphan tool-result messages', async () => {
     const store = makeMockStore()
     store.sessionRecent.mockResolvedValue([
+      makeTurn('user', 'before tool', 0),
       makeTurn('tool', 'search result', 0, { tool_name: 'semantic_search' }),
+      makeTurn('assistant', 'after tool', 2),
     ])
 
     const msgs = await loadSession(store, { userId: 'u', sessionId: 's' })
 
-    expect(msgs).toHaveLength(1)
-    expect(msgs[0].role).toBe('tool')
-    const content = (msgs[0] as { content: unknown[] }).content
-    expect(Array.isArray(content)).toBe(true)
-    expect(content[0]).toMatchObject({
-      type: 'tool-result',
-      toolName: 'semantic_search',
-      output: { type: 'text', value: 'search result' },
-    })
+    expect(msgs).toEqual([
+      { role: 'user', content: 'before tool' },
+      { role: 'assistant', content: 'after tool' },
+    ])
   })
 
   it('forwards limit to sessionRecent', async () => {
@@ -127,12 +126,11 @@ describe('createOnFinish (closure mode)', () => {
     })
     await cb(makeEvent([]))
 
-    expect(store.sessionAppend).toHaveBeenCalledTimes(1)
-    expect(store.sessionAppend).toHaveBeenCalledWith(
+    expect(store.sessionAppendMany).toHaveBeenCalledTimes(1)
+    expect(store.sessionAppendMany).toHaveBeenCalledWith(
       'u',
       's',
-      'user',
-      'hello world'
+      [{ role: 'user', content: 'hello world' }]
     )
   })
 
@@ -145,7 +143,7 @@ describe('createOnFinish (closure mode)', () => {
     })
     await cb(makeEvent([]))
 
-    expect(store.sessionAppend).not.toHaveBeenCalled()
+    expect(store.sessionAppendMany).not.toHaveBeenCalled()
   })
 
   it('persists one assistant message from a single step', async () => {
@@ -163,12 +161,11 @@ describe('createOnFinish (closure mode)', () => {
       ])
     )
 
-    expect(store.sessionAppend).toHaveBeenCalledTimes(1)
-    expect(store.sessionAppend).toHaveBeenCalledWith(
+    expect(store.sessionAppendMany).toHaveBeenCalledTimes(1)
+    expect(store.sessionAppendMany).toHaveBeenCalledWith(
       'u',
       's',
-      'assistant',
-      'the answer is 42'
+      [{ role: 'assistant', content: 'the answer is 42' }]
     )
   })
 
@@ -178,11 +175,10 @@ describe('createOnFinish (closure mode)', () => {
       makeEvent([{ messages: [{ role: 'assistant', content: 'hi there' }] }])
     )
 
-    expect(store.sessionAppend).toHaveBeenCalledWith(
+    expect(store.sessionAppendMany).toHaveBeenCalledWith(
       'u',
       's',
-      'assistant',
-      'hi there'
+      [{ role: 'assistant', content: 'hi there' }]
     )
   })
 
@@ -208,12 +204,10 @@ describe('createOnFinish (closure mode)', () => {
       ])
     )
 
-    expect(store.sessionAppend).toHaveBeenCalledWith(
+    expect(store.sessionAppendMany).toHaveBeenCalledWith(
       'u',
       's',
-      'tool',
-      'result text',
-      { toolName: 'semantic_search' }
+      [{ role: 'tool', content: 'result text', toolName: 'semantic_search' }]
     )
   })
 
@@ -262,23 +256,21 @@ describe('createOnFinish (closure mode)', () => {
       ])
     )
 
-    // user + assistant(tool-call marker) + tool + final assistant = 4
-    expect(store.sessionAppend).toHaveBeenCalledTimes(4)
-    const calls = store.sessionAppend.mock.calls
-    expect(calls[0]).toEqual(['u', 's', 'user', 'search my prefs'])
-    expect(calls[1][2]).toBe('assistant') // the tool-call marker
-    expect(calls[2]).toEqual([
+    expect(store.sessionAppendMany).toHaveBeenCalledTimes(1)
+    expect(store.sessionAppendMany).toHaveBeenCalledWith(
       'u',
       's',
-      'tool',
-      'user likes coffee',
-      { toolName: 'semantic_search' },
-    ])
-    expect(calls[3]).toEqual(['u', 's', 'assistant', 'You like coffee.'])
+      [
+        { role: 'user', content: 'search my prefs' },
+        { role: 'assistant', content: '[tool-call: semantic_search]' },
+        { role: 'tool', content: 'user likes coffee', toolName: 'semantic_search' },
+        { role: 'assistant', content: 'You like coffee.' },
+      ]
+    )
   })
 
   it('swallows and logs persistence errors without throwing', async () => {
-    store.sessionAppend.mockRejectedValueOnce(new Error('DB down'))
+    store.sessionAppendMany.mockRejectedValueOnce(new Error('DB down'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const cb = createOnFinish(store, {
@@ -307,17 +299,13 @@ describe('createOnFinish (context mode)', () => {
       )
     )
 
-    expect(store.sessionAppend).toHaveBeenCalledWith(
+    expect(store.sessionAppendMany).toHaveBeenCalledWith(
       'ctx-user',
       'ctx-sess',
-      'user',
-      'hello'
-    )
-    expect(store.sessionAppend).toHaveBeenCalledWith(
-      'ctx-user',
-      'ctx-sess',
-      'assistant',
-      'hi'
+      [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' },
+      ]
     )
   })
 
@@ -328,7 +316,7 @@ describe('createOnFinish (context mode)', () => {
 
     await cb(makeEvent([{ messages: [{ role: 'assistant', content: 'hi' }] }]))
 
-    expect(store.sessionAppend).not.toHaveBeenCalled()
+    expect(store.sessionAppendMany).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
   })
@@ -347,11 +335,10 @@ describe('createOnFinish (context mode)', () => {
       )
     )
 
-    expect(store.sessionAppend).toHaveBeenCalledWith(
+    expect(store.sessionAppendMany).toHaveBeenCalledWith(
       'override-user',
       'override-sess',
-      'assistant',
-      'hi'
+      [{ role: 'assistant', content: 'hi' }]
     )
   })
 })

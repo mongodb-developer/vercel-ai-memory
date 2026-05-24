@@ -160,5 +160,12 @@ describe('session hooks — end to end against Atlas', () => {
 
     expect(persisted[3].role).toBe('assistant')
     expect(persisted[3].content).toBe('You like climbing.')
+
+    const restored = await loadSession(store, { userId: USER, sessionId })
+    expect(restored).toEqual([
+      { role: 'user', content: 'what do I like?' },
+      { role: 'assistant', content: '[tool-call: semantic_search]' },
+      { role: 'assistant', content: 'You like climbing.' },
+    ])
   })
 })

@@ -25,20 +25,18 @@ describe('SemanticMemory', () => {
     }
   })
 
-  it('temporal versioning: save twice, only latest is is_latest=true', async () => {
-    const name = `Entity-${Date.now()}`
+  it('in-place upsert: save twice with same name produces 1 doc (default keepHistory=false)', async () => {
+    const name = `Upsert-${Date.now()}`
     await store.semanticSave(USER, name, 'First version')
     await store.semanticSave(USER, name, 'Second version — updated')
 
-    // Access the underlying collection via the store's private field
     const col = (store as unknown as { semantic: { find: (q: object) => { toArray: () => Promise<{ is_latest: boolean; description: string }[]> } } }).semantic
     if (col) {
       const docs = await col.find({ user_id: USER, name }).toArray()
-      const latestDocs = docs.filter(d => d.is_latest)
-      const oldDocs = docs.filter(d => !d.is_latest)
-      expect(latestDocs).toHaveLength(1)
-      expect(oldDocs).toHaveLength(1)
-      expect(latestDocs[0].description).toBe('Second version — updated')
+      // Default mode: only 1 document (upserted in place)
+      expect(docs).toHaveLength(1)
+      expect(docs[0].is_latest).toBe(true)
+      expect(docs[0].description).toBe('Second version — updated')
     }
   })
 
@@ -61,6 +59,25 @@ describe('SemanticMemory', () => {
     if (col) {
       const doc = await col.findOne({ user_id: USER, name, is_latest: true })
       expect(doc?.tags).toEqual(['tag1', 'tag2'])
+    }
+  })
+
+  it('upsert preserves stats from initial insert', async () => {
+    const name = `StatsPreserve-${Date.now()}`
+    await store.semanticSave(USER, name, 'First save')
+
+    const col = (store as unknown as { semantic: { findOne: (q: object) => Promise<{ stats: { retrieval_ct: number } } | null> } }).semantic
+    if (col) {
+      const doc = await col.findOne({ user_id: USER, name, is_latest: true })
+      expect(doc?.stats.retrieval_ct).toBe(0)
+    }
+
+    // Second save should keep the original stats (via $setOnInsert not overwriting)
+    await store.semanticSave(USER, name, 'Updated save')
+
+    if (col) {
+      const doc = await col.findOne({ user_id: USER, name, is_latest: true })
+      expect(doc?.stats.retrieval_ct).toBe(0)
     }
   })
 })

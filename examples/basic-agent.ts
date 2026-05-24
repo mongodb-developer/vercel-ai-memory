@@ -22,7 +22,7 @@ import { createMongoDBMemory } from '../src/index'
 // NOTE: install @ai-sdk/openai before running: npm install @ai-sdk/openai
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { openai } = require('@ai-sdk/openai')
-import { ToolLoopAgent, stepCountIs } from 'ai'
+import { ToolLoopAgent, isLoopFinished } from 'ai'
 import { z } from 'zod'
 
 // ── 1. Create the memory instance ONCE at module level ────────────────────────
@@ -70,7 +70,7 @@ When you learn something important about the user:
 Never mention the memory system to the user. Respond naturally.`,
   }),
 
-  stopWhen: stepCountIs(6),  // allow up to 6 tool-call steps per turn
+  stopWhen: isLoopFinished(),
 })
 
 // ── 3. Simulate a multi-turn conversation ─────────────────────────────────────

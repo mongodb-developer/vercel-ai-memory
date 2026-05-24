@@ -3,6 +3,8 @@ import { createMongoDBMemory } from '../../src/index'
 import { mockEmbedder } from '../helpers/mock-embedder'
 import { ATLAS_URI } from '../helpers/atlas-client'
 
+const TEST_URI = ATLAS_URI ?? 'mongodb://localhost:27017'
+
 // We mock the MongoClient so this unit test doesn't hit the network.
 // Must use a regular function (not arrow) so it works as a constructor with `new`.
 vi.mock('mongodb', async (importOriginal) => {
@@ -43,13 +45,13 @@ describe('createMongoDBMemory factory', () => {
 
   beforeEach(() => {
     memory = createMongoDBMemory({
-      uri: ATLAS_URI,
+      uri: TEST_URI,
       embedder: mockEmbedder,
     })
   })
 
   afterEach(async () => {
-    await memory.close()
+    await memory?.close()
   })
 
   it('returns a callable function', () => {
@@ -98,14 +100,15 @@ describe('createMongoDBMemory factory', () => {
     expect(toolsAlice.memory).not.toBe(toolsBob.memory)
   })
 
-  it('respects default userId set at creation time', () => {
+  it('respects default userId set at creation time', async () => {
     const memWithDefaults = createMongoDBMemory({
-      uri: ATLAS_URI,
+      uri: TEST_URI,
       embedder: mockEmbedder,
       userId: 'default-user',
       sessionId: 'default-session',
     })
     const tools = memWithDefaults()  // uses defaults
     expect(tools).toHaveProperty('memory')
+    await memWithDefaults.close()
   })
 })

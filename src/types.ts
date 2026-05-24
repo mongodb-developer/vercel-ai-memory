@@ -287,6 +287,16 @@ export interface TopologyOptions {
    * given memory type (e.g. `['tenant_id']` for multi-tenant setups).
    */
   extraFilterFields?: Partial<Record<VectorMemoryType, string[]>>
+  /**
+   * When `true`, semantic and procedural saves keep a full version history
+   * (each save inserts a new document, old ones are marked `is_latest: false`).
+   *
+   * When `false` (the default), saves **upsert** the existing document in
+   * place — fewer documents, less index bloat, and a single write op per save.
+   *
+   * Default: `false`.
+   */
+  keepHistory?: boolean
 }
 
 /**
@@ -407,6 +417,12 @@ export interface MemoryConfig {
     semantic: DecayPolicy
     procedural: DecayPolicy
   }>
+
+  /**
+   * When `true`, semantic and procedural saves keep full version history
+   * (insert-new-doc per save). When `false`, saves upsert in place.
+   */
+  keepHistory: boolean
 
   filtering: Required<FilteringOptions>
   defaults: Required<DefaultsOptions>

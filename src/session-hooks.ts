@@ -71,31 +71,26 @@ export async function loadSession(
   opts: SessionHookOptions
 ): Promise<ModelMessage[]> {
   const turns: SessionMemory[] = await store.sessionRecent(opts.sessionId, opts.limit)
-  return turns.map(sessionTurnToModelMessage)
+  return turns.flatMap((turn) => {
+    const message = sessionTurnToModelMessage(turn)
+    return message ? [message] : []
+  })
 }
 
-function sessionTurnToModelMessage(turn: SessionMemory): ModelMessage {
+function sessionTurnToModelMessage(turn: SessionMemory): ModelMessage | null {
   switch (turn.role) {
     case 'user':
       return { role: 'user', content: turn.content }
     case 'assistant':
       return { role: 'assistant', content: turn.content }
     case 'tool':
-      // We stored a human-readable tool output string + tool name; re-hydrate
-      // as a minimal tool message. For most models this is enough context;
-      // for exact tool-call-id round-tripping the user should use the agent's
-      // own message history — session memory is a transcript, not a replay log.
-      return {
-        role: 'tool',
-        content: [
-          {
-            type: 'tool-result',
-            toolCallId: `session-${turn._id.toString()}`,
-            toolName: turn.tool_name ?? 'unknown',
-            output: { type: 'text', value: turn.content },
-          },
-        ],
-      }
+      // Do not replay standalone tool results into provider input. OpenAI
+      // Responses and Anthropic Messages both require each tool-result block to
+      // match a tool-use/tool-call in the immediately preceding assistant turn.
+      // Session memory stores a readable transcript/audit trail, not an exact
+      // provider replay log, so restored history intentionally excludes tool
+      // messages to avoid orphan tool-result validation errors.
+      return null
   }
 }
 
@@ -170,9 +165,15 @@ export function createOnFinish(
     }
 
     try {
+      const turns: Array<{
+        role: SessionMemory['role']
+        content: string
+        toolName?: string
+      }> = []
+
       // 1. Persist the incoming user prompt (if provided and enabled).
       if (persistUserPrompt && prompt !== undefined) {
-        await persistPrompt(store, userId, sessionId, prompt)
+        collectPromptTurns(turns, prompt)
       }
 
       // 2. Persist every response message across all steps.
@@ -183,8 +184,12 @@ export function createOnFinish(
       for (const step of steps) {
         const messages = step.response?.messages ?? []
         for (const msg of messages) {
-          await persistResponseMessage(store, userId, sessionId, msg)
+          collectResponseMessageTurn(turns, msg)
         }
+      }
+
+      if (turns.length > 0) {
+        await store.sessionAppendMany(userId, sessionId, turns)
       }
     } catch (err) {
       // Best-effort: we never want to break the generation because memory
@@ -199,15 +204,17 @@ export function createOnFinish(
   }
 }
 
-async function persistPrompt(
-  store: MongoMemoryStore,
-  userId: string,
-  sessionId: string,
+function collectPromptTurns(
+  turns: Array<{
+    role: SessionMemory['role']
+    content: string
+    toolName?: string
+  }>,
   prompt: string | ModelMessage[]
-): Promise<void> {
+): void {
   if (typeof prompt === 'string') {
     if (prompt.length === 0) return
-    await store.sessionAppend(userId, sessionId, 'user', prompt)
+    turns.push({ role: 'user', content: prompt })
     return
   }
 
@@ -218,36 +225,34 @@ async function persistPrompt(
     const text = extractText(msg)
     if (!text) continue
     if (msg.role === 'user') {
-      await store.sessionAppend(userId, sessionId, 'user', text)
+      turns.push({ role: 'user', content: text })
     } else if (msg.role === 'assistant') {
-      await store.sessionAppend(userId, sessionId, 'assistant', text)
+      turns.push({ role: 'assistant', content: text })
     } else if (msg.role === 'tool') {
-      await store.sessionAppend(userId, sessionId, 'tool', text, {
-        toolName: firstToolName(msg),
-      })
+      turns.push({ role: 'tool', content: text, toolName: firstToolName(msg) })
     }
   }
 }
 
-async function persistResponseMessage(
-  store: MongoMemoryStore,
-  userId: string,
-  sessionId: string,
+function collectResponseMessageTurn(
+  turns: Array<{
+    role: SessionMemory['role']
+    content: string
+    toolName?: string
+  }>,
   msg: ResponseMessageLike
-): Promise<void> {
+): void {
   if (msg.role === 'assistant') {
     const text = extractText(msg)
     if (!text) return
-    await store.sessionAppend(userId, sessionId, 'assistant', text)
+    turns.push({ role: 'assistant', content: text })
     return
   }
 
   if (msg.role === 'tool') {
     const text = extractText(msg)
     if (!text) return
-    await store.sessionAppend(userId, sessionId, 'tool', text, {
-      toolName: firstToolName(msg),
-    })
+    turns.push({ role: 'tool', content: text, toolName: firstToolName(msg) })
   }
 }
 
