@@ -94,7 +94,7 @@ function buildSchema(disabled: Set<MemoryType>) {
         'For episodic_save and scratchpad_promote: event type (e.g. "interaction", "purchase").'
       ),
     context: z
-      .record(z.unknown())
+      .record(z.string(), z.unknown())
       .nullable()
       .optional()
       .describe('For episodic_save and scratchpad_promote: free-form event metadata.'),

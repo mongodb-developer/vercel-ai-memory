@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-06-18
+
+### Fixed
+- **zod peer dependency widened to support v4** — `zod` peer range is now
+  `^3.25.76 || ^4.1.8`, matching what the `ai` SDK already allows. This resolves
+  `npm ERESOLVE` peer-dependency conflicts for consumers using `ai@7` with
+  `zod@4`. The `z.record(z.unknown())` call in the memory tool schema was updated
+  to the two-argument form `z.record(z.string(), z.unknown())`, which is valid in
+  both zod 3 and zod 4.
+- **mongodb peer dependency widened to support v7** — `mongodb` peer range is now
+  `^6.0.0 || ^7.0.0`. Verified against `mongodb@7.3.0` (lint, build, and all unit
+  tests pass); the package's `MongoClient`, `Db`, `Collection`, `ObjectId`,
+  `Filter`, and `Document` usage is unchanged across the v6 → v7 boundary. This
+  prevents an `invalid peer` error for consumers who let `npm install mongodb`
+  resolve to the newly released v7.
+
 ## [0.4.0] — 2026-06-18
 
 ### Changed
