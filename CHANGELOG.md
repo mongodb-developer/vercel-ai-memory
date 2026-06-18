@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-06-18
+
+### Changed
+- **AI SDK peer dependency widened to support v7** — `ai` peer range is now
+  `^6.0.0 || ^7.0.0`. Verified against `ai@7.0.0-beta.181` (lint, unit tests,
+  and build all pass); the package's `embed`, `tool`, `ModelMessage`,
+  `AssistantModelMessage`, and `ToolModelMessage` usage is unchanged across the
+  v6 → v7 major boundary.
+
 ## [0.3.0] — 2026-05-24
 
 ### Fixed

@@ -28,8 +28,9 @@ pnpm add @mongodb-developer/vercel-ai-memory
 npm install ai mongodb zod
 ```
 
-This package targets **AI SDK v6** (`ai@^6.0.0`). The examples use v6 APIs such as
-`ToolLoopAgent` and `isLoopFinished()`.
+This package supports **AI SDK v6 and v7** (`ai@^6.0.0 || ^7.0.0`). The examples
+use APIs such as `ToolLoopAgent` and `isLoopFinished()` that are available in
+both major versions.
 
 ## Quick Start
 
