@@ -1,4 +1,8 @@
 import { MongoClient } from 'mongodb'
+import type { DriverInfo } from 'mongodb'
+import { version } from '../package.json'
+
+const DRIVER_INFO: DriverInfo = { name: 'vercel-ai-memory', version }
 import type { ModelMessage } from '@ai-sdk/provider-utils'
 import { EmbeddingAdapter } from './embeddings'
 import { MongoMemoryStore } from './store'
@@ -161,6 +165,7 @@ export function createMongoDBMemory(options: MongoDBMemoryOptions): MongoDBMemor
 
   const client = new MongoClient(options.uri, {
     appName: 'devrel-integration-memory-vercel-typescript',
+    driverInfo: DRIVER_INFO,
   })
   const adapter = new EmbeddingAdapter(options.embedder)
   const store = new MongoMemoryStore(client, adapter, config)

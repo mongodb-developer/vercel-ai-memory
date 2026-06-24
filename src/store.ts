@@ -1,4 +1,8 @@
 import { MongoClient, Db, Collection, ObjectId, Filter, Document } from 'mongodb'
+import type { DriverInfo } from 'mongodb'
+import { version } from '../package.json'
+
+const DRIVER_INFO: DriverInfo = { name: 'vercel-ai-memory', version }
 import { EmbeddingAdapter } from './embeddings'
 import type {
   SessionMemory,
@@ -60,6 +64,9 @@ export class MongoMemoryStore {
       ? this._makeLegacyConfig(configOrDbName)
       : configOrDbName
 
+    if (typeof client.appendMetadata === 'function') {
+      client.appendMetadata(DRIVER_INFO)
+    }
     this.db = client.db(this.config.dbName)
     this.session = this.db.collection<SessionMemory>(this.config.collections.session)
     this.semantic = this.db.collection<SemanticMemory>(this.config.collections.semantic)
