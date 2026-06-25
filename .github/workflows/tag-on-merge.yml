@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      created: ${{ steps.tag.outputs.created }}
+      version: ${{ steps.pkg.outputs.version }}
 
     steps:
       - name: Checkout
@@ -21,6 +24,7 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Create tag if it does not exist
+        id: tag
         env:
           TAG: v${{ steps.pkg.outputs.version }}
         run: |
@@ -28,8 +32,21 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
             echo "Tag $TAG already exists — skipping."
+            echo "created=false" >> "$GITHUB_OUTPUT"
           else
             git tag "$TAG"
             git push origin "$TAG"
             echo "Created and pushed tag $TAG."
+            echo "created=true" >> "$GITHUB_OUTPUT"
           fi
+
+  publish:
+    name: Publish new version
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    uses: ./.github/workflows/publish.yml
+    permissions:
+      contents: read
+      id-token: write
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
