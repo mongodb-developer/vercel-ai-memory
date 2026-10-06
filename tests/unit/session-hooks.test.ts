@@ -66,7 +66,7 @@ describe('loadSession', () => {
     const msgs = await loadSession(store, { userId: 'u', sessionId: 's' })
 
     expect(msgs).toEqual([])
-    expect(store.sessionRecent).toHaveBeenCalledWith('s', undefined)
+    expect(store.sessionRecent).toHaveBeenCalledWith('u', 's', undefined)
   })
 
   it('maps user and assistant turns to the right ModelMessage shape', async () => {
@@ -106,7 +106,7 @@ describe('loadSession', () => {
     store.sessionRecent.mockResolvedValue([])
 
     await loadSession(store, { userId: 'u', sessionId: 's', limit: 10 })
-    expect(store.sessionRecent).toHaveBeenCalledWith('s', 10)
+    expect(store.sessionRecent).toHaveBeenCalledWith('u', 's', 10)
   })
 })
 

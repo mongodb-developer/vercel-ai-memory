@@ -177,10 +177,14 @@ export function resolveConfig(
     }
   }
 
+  // Scope defaults: fail closed. Only fall back to the shared legacy 'default'
+  // bucket when the developer explicitly opts in.
+  const sharedDefault = options.allowSharedDefaultScope ? 'default' : ''
+
   return {
     dbName,
-    defaultUserId: options.userId ?? 'default',
-    defaultSessionId: options.sessionId ?? 'default',
+    defaultUserId: options.userId ?? sharedDefault,
+    defaultSessionId: options.sessionId ?? sharedDefault,
     autoEmbed,
     collections,
     vectorIndexNames,

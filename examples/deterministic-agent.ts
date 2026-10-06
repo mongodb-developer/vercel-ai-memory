@@ -13,7 +13,8 @@
  * Prerequisites:
  *   - MongoDB Atlas cluster with vector search enabled (M10+)
  *   - npm install @ai-sdk/openai ai zod
- *   - MONGODB_URI environment variable set
+ *   - MONGODB_URI environment variable set (local: .env.local; production:
+ *     store it as a Vercel Secret — see README "Connection string & secrets")
  *   - OPENAI_API_KEY environment variable set
  *
  * Run:
@@ -124,7 +125,7 @@ async function main() {
   }
 
   // Verify the transcript was captured deterministically.
-  const stored = await mongodbMemory.store.sessionRecent(sessionId, 100)
+  const stored = await mongodbMemory.store.sessionRecent(userId, sessionId, 100)
   console.log(`\n📝 Session transcript stored: ${stored.length} turns`)
   for (const t of stored) {
     console.log(`  [${t.seq}] ${t.role}: ${t.content.slice(0, 80)}${t.content.length > 80 ? '…' : ''}`)

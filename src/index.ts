@@ -189,8 +189,18 @@ export function createMongoDBMemory(options: MongoDBMemoryOptions): MongoDBMemor
 
   // ── The callable function ──────────────────────────────────────────────────
   function memoryInstance(callOptions?: MemoryCallOptions) {
-    const userId = callOptions?.userId ?? config.defaultUserId
-    const sessionId = callOptions?.sessionId ?? config.defaultSessionId
+    const userId = callOptions?.userId || config.defaultUserId
+    const sessionId = callOptions?.sessionId || config.defaultSessionId
+
+    // Fail closed: never let an unscoped call land in a shared bucket.
+    if (!userId || !sessionId) {
+      throw new Error(
+        '[mongodb-memory] mongodbMemory() requires `userId` and `sessionId`. ' +
+          'Pass them per call from your trusted server-side auth context, e.g. ' +
+          '`mongodbMemory({ userId: session.user.id, sessionId })`. For ' +
+          'single-user demos only, set `allowSharedDefaultScope: true`.'
+      )
+    }
 
     // Pass ensureConnected as the onBeforeExecute hook for lazy bootstrap.
     // The config lets the tool tailor its command enum to the enabled types.

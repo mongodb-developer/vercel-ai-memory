@@ -88,9 +88,21 @@ describe('createMongoDBMemory factory', () => {
     expect(typeof memory.close).toBe('function')
   })
 
-  it('uses default userId/sessionId when not provided', () => {
-    const tools = memory()  // no options
-    expect(tools).toHaveProperty('memory')
+  it('throws when no userId/sessionId can be resolved (fail closed)', () => {
+    expect(() => memory()).toThrowError(/requires `userId` and `sessionId`/)
+    expect(() => memory({ userId: 'alice' })).toThrowError(/requires `userId` and `sessionId`/)
+    expect(() => memory({ userId: '', sessionId: 's' })).toThrowError(/requires/)
+  })
+
+  it('allowSharedDefaultScope: true restores the legacy shared default bucket', async () => {
+    const legacy = createMongoDBMemory({
+      uri: TEST_URI,
+      embedder: mockEmbedder,
+      allowSharedDefaultScope: true,
+    })
+    expect(legacy()).toHaveProperty('memory')
+    expect(legacy.config.defaultUserId).toBe('default')
+    await legacy.close()
   })
 
   it('different calls with different userId produce distinct tool instances', () => {

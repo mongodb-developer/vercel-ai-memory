@@ -11,6 +11,10 @@
 //
 // Every read/write is partitioned by Eve's trusted principal scope — the model
 // never chooses the memory owner.
+//
+// MONGODB_URI: in production, store it as a Vercel Secret in the deployment
+// environment (never in source or compiled artifacts). Locally, `eve link` /
+// `vercel env pull .env.local`. See README "Connection string & secrets".
 
 import { defineMemory } from 'eve/memory'
 import { byPrincipal } from 'eve/memory/scope'

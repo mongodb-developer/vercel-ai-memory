@@ -16,7 +16,8 @@
  *     Embedding enabled for your organization** (Preview feature). On dedicated
  *     (M10+) clusters, enable storage auto-scaling.
  *   - npm install @ai-sdk/openai ai zod
- *   - MONGODB_URI environment variable set
+ *   - MONGODB_URI environment variable set (local: .env.local; production:
+ *     store it as a Vercel Secret — see README "Connection string & secrets")
  *   - OPENAI_API_KEY environment variable set (chat model only — the conversation
  *     uses OpenAI; embeddings are generated server-side by Atlas/Voyage AI)
  *   - Optional: VOYAGE_MODEL to override the embedding model (defaults to 'voyage-4')

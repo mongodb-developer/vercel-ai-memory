@@ -56,7 +56,7 @@ describe('session hooks — end to end against Atlas', () => {
       )
     }
 
-    const persisted = await store.sessionRecent(sessionId, 100)
+    const persisted = await store.sessionRecent(USER, sessionId, 100)
     expect(persisted).toHaveLength(turns.length * 2)
 
     // Order: user / assistant / user / assistant / ...
@@ -144,7 +144,7 @@ describe('session hooks — end to end against Atlas', () => {
       )
     )
 
-    const persisted = await store.sessionRecent(sessionId, 100)
+    const persisted = await store.sessionRecent(USER, sessionId, 100)
     // user + assistant(tool-call marker) + tool + assistant(final) = 4
     expect(persisted).toHaveLength(4)
 

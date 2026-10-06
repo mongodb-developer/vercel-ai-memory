@@ -70,7 +70,7 @@ export async function loadSession(
   store: MongoMemoryStore,
   opts: SessionHookOptions
 ): Promise<ModelMessage[]> {
-  const turns: SessionMemory[] = await store.sessionRecent(opts.sessionId, opts.limit)
+  const turns: SessionMemory[] = await store.sessionRecent(opts.userId, opts.sessionId, opts.limit)
   return turns.flatMap((turn) => {
     const message = sessionTurnToModelMessage(turn)
     return message ? [message] : []
