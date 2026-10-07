@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Lint, unit & integration tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      atlas:
+        image: mongodb/mongodb-atlas-local:latest
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "/usr/local/bin/runner healthcheck"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (typecheck)
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Integration tests (local Atlas)
+        run: npm run test:integration
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true

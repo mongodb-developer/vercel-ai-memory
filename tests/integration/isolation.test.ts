@@ -59,4 +59,28 @@ describe('Isolation — session & scratchpad reads', () => {
     const notes = await store.scratchpadRead(ALICE, sess)
     expect(notes.map((n) => n.note)).toEqual(['alice private note'])
   })
+
+  it('concurrent promotions of one note create exactly one episodic memory', async () => {
+    const sess = `iso-race-${Date.now()}`
+    const noteId = await store.scratchpadWrite(ALICE, sess, 'promote me once')
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () =>
+        store.scratchpadPromote(noteId.toString(), ALICE, 'race')
+      )
+    )
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    expect(fulfilled).toHaveLength(1)
+
+    const client = await getTestClient()
+    const episodes = await client
+      .db(TEST_DB)
+      .collection('episodic_memory')
+      .countDocuments({ user_id: ALICE, event_type: 'race', description: 'promote me once' })
+    expect(episodes).toBe(1)
+
+    const note = await rawDoc('scratchpad_memory', noteId)
+    expect(note?.promoted).toBe(true)
+    expect(note?.promoted_to_id).toBeInstanceOf(ObjectId)
+  })
 })

@@ -54,9 +54,23 @@ The tool schema and the Eve provider API are unchanged — only direct
 `store.*` callers need to update.
 
 ### Fixed
+- **Atomic `scratchpadPromote`.** The note is claimed with a single
+  owner-scoped `findOneAndUpdate` before the episodic write, so concurrent
+  promotions of the same note produce exactly one episodic memory. If the
+  episodic write fails, the claim is released.
+- **`episodicExists` owner scope cannot be overridden.** The trusted
+  `user_id` is now applied after the caller's filter, so a `user_id` key in
+  the filter can no longer replace the scope.
 - Root package type exports now point to the generated ESM (`index.d.mts`)
   and CommonJS (`index.d.ts`) declarations instead of a missing `index.d.cts`.
 - Release tests validate built package exports and Eve dependency isolation.
+
+### CI
+- New `CI` GitHub Actions workflow runs lint, build, unit, and integration
+  tests against a local Atlas service (`mongodb/mongodb-atlas-local`) on every
+  pull request and push to `main`.
+- `ci/ai-ml-pipeline-testing/` contains the `vercel-ai-memory-js` test
+  definition for MongoDB's `ai-ml-pipeline-testing` Evergreen project.
 
 ### Documentation
 - New README section **"Connection string & secrets"**: production guidance

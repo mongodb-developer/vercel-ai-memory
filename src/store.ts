@@ -819,6 +819,9 @@ export class MongoMemoryStore {
   /**
    * Return true if at least one episodic doc for `userId` matches `filter`.
    * Used by the Eve adapter to make replayed captures idempotent.
+   *
+   * The owner scope is applied last, so a `user_id` key inside `filter` can
+   * never widen or replace the caller's scope.
    */
   async episodicExists(
     userId: string,
@@ -827,7 +830,7 @@ export class MongoMemoryStore {
     this._assertScope('userId', userId)
     if (!this._enabled('episodic')) return false
     const doc = await this.episodic.findOne(
-      { user_id: userId, ...filter } as Filter<EpisodicMemory>,
+      { ...filter, user_id: userId } as Filter<EpisodicMemory>,
       { projection: { _id: 1 } }
     )
     return doc !== null
@@ -906,22 +909,34 @@ export class MongoMemoryStore {
     if (!this._enabled('scratchpad')) {
       throw new Error('[mongodb-memory] Scratchpad memory is disabled')
     }
-    // Owner-scoped lookup: a note belonging to another user is reported as
-    // "not found" (never promoted, never leaked into this user's episodic memory).
+    // Atomically claim an unpromoted note owned by the caller. A note belonging
+    // to another user is reported as "not found" (never promoted, never leaked
+    // into this user's episodic memory), and concurrent promotions of the same
+    // note cannot both succeed.
     const doc = ObjectId.isValid(scratchpadId)
-      ? await this.scratchpad.findOne({
-          _id: new ObjectId(scratchpadId),
-          user_id: userId,
-          promoted: false,
-        })
+      ? await this.scratchpad.findOneAndUpdate(
+          { _id: new ObjectId(scratchpadId), user_id: userId, promoted: false },
+          { $set: { promoted: true } },
+          { returnDocument: 'before' }
+        )
       : null
     if (!doc) throw new Error(`Scratchpad note ${scratchpadId} not found`)
 
-    const episodicId = await this.episodicSave(userId, eventType, doc.note, opts)
+    let episodicId: ObjectId
+    try {
+      episodicId = await this.episodicSave(userId, eventType, doc.note, opts)
+    } catch (err) {
+      // Release the claim so the note can be promoted again later.
+      await this.scratchpad.updateOne(
+        { _id: doc._id, user_id: userId, promoted_to_id: { $exists: false } },
+        { $set: { promoted: false } }
+      )
+      throw err
+    }
 
     await this.scratchpad.updateOne(
-      { _id: doc._id },
-      { $set: { promoted: true, promoted_to_id: episodicId } }
+      { _id: doc._id, user_id: userId },
+      { $set: { promoted_to_id: episodicId } }
     )
 
     return { episodicId }

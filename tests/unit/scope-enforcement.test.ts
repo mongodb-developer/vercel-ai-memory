@@ -14,7 +14,14 @@ import { mockEmbedder } from '../helpers/mock-embedder'
  */
 
 type Col = Record<
-  'find' | 'findOne' | 'updateOne' | 'updateMany' | 'insertOne' | 'insertMany' | 'aggregate',
+  | 'find'
+  | 'findOne'
+  | 'findOneAndUpdate'
+  | 'updateOne'
+  | 'updateMany'
+  | 'insertOne'
+  | 'insertMany'
+  | 'aggregate',
   ReturnType<typeof vi.fn>
 >
 
@@ -22,6 +29,7 @@ function makeCol(): Col {
   return {
     find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
     findOne: vi.fn().mockResolvedValue(null),
+    findOneAndUpdate: vi.fn().mockResolvedValue(null),
     updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     updateMany: vi.fn().mockResolvedValue({ matchedCount: 0 }),
     insertOne: vi.fn().mockResolvedValue({ insertedId: new ObjectId() }),
@@ -106,7 +114,7 @@ describe('session / scratchpad reads are owner-scoped', () => {
 
   it('scratchpadPromote only promotes a note owned by the caller', async () => {
     await expect(store.scratchpadPromote(ID, 'bob', 'interaction')).rejects.toThrow(/not found/)
-    expect(cols.scratchpad_memory.findOne.mock.calls[0][0]).toEqual({
+    expect(cols.scratchpad_memory.findOneAndUpdate.mock.calls[0][0]).toEqual({
       _id: new ObjectId(ID),
       user_id: 'bob',
       promoted: false,
@@ -115,11 +123,63 @@ describe('session / scratchpad reads are owner-scoped', () => {
     expect(cols.episodic_memory.insertOne).not.toHaveBeenCalled()
   })
 
+  it('scratchpadPromote atomically claims the note, then records the episodic id', async () => {
+    const noteId = new ObjectId(ID)
+    cols.scratchpad_memory.findOneAndUpdate.mockResolvedValue({
+      _id: noteId,
+      user_id: 'alice',
+      note: 'private note',
+    })
+
+    const { episodicId } = await store.scratchpadPromote(ID, 'alice', 'interaction')
+
+    expect(cols.scratchpad_memory.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: noteId, user_id: 'alice', promoted: false },
+      { $set: { promoted: true } },
+      { returnDocument: 'before' }
+    )
+    expect(cols.scratchpad_memory.findOne).not.toHaveBeenCalled()
+    expect(cols.episodic_memory.insertOne.mock.calls[0][0]).toMatchObject({
+      user_id: 'alice',
+      description: 'private note',
+    })
+    expect(cols.scratchpad_memory.updateOne).toHaveBeenCalledWith(
+      { _id: noteId, user_id: 'alice' },
+      { $set: { promoted_to_id: episodicId } }
+    )
+  })
+
+  it('scratchpadPromote releases its claim if the episodic write fails', async () => {
+    const noteId = new ObjectId(ID)
+    cols.scratchpad_memory.findOneAndUpdate.mockResolvedValue({
+      _id: noteId,
+      user_id: 'alice',
+      note: 'private note',
+    })
+    cols.episodic_memory.insertOne.mockRejectedValue(new Error('write failed'))
+
+    await expect(store.scratchpadPromote(ID, 'alice', 'interaction')).rejects.toThrow(
+      /write failed/
+    )
+    expect(cols.scratchpad_memory.updateOne).toHaveBeenCalledWith(
+      { _id: noteId, user_id: 'alice', promoted_to_id: { $exists: false } },
+      { $set: { promoted: false } }
+    )
+  })
+
   it('scratchpadPromote rejects malformed ids without querying', async () => {
     await expect(store.scratchpadPromote('nope', 'bob', 'interaction')).rejects.toThrow(
       /not found/
     )
-    expect(cols.scratchpad_memory.findOne).not.toHaveBeenCalled()
+    expect(cols.scratchpad_memory.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('episodicExists cannot override the owner scope through its filter', async () => {
+    await store.episodicExists('alice', { user_id: 'bob', event_type: 'login' })
+    expect(cols.episodic_memory.findOne.mock.calls[0][0]).toEqual({
+      event_type: 'login',
+      user_id: 'alice',
+    })
   })
 })
 
