@@ -235,7 +235,7 @@ describe('buildMemoryTool — dynamic command enum', () => {
 // ─── Executor smoke test: memory_forget routes to store.forget() ──────────────
 
 describe('memory_forget execution', () => {
-  it('calls store.forget with memory_type + id and returns success message', async () => {
+  it('calls store.forget scoped to the bound userId and returns success message', async () => {
     const forget = vi.fn().mockResolvedValue(true)
     const store = { forget } as unknown as Parameters<typeof buildMemoryTool>[0]
 
@@ -247,7 +247,8 @@ describe('memory_forget execution', () => {
       id: '507f1f77bcf86cd799439011',
     })
 
-    expect(forget).toHaveBeenCalledWith('semantic', '507f1f77bcf86cd799439011')
+    // The owner comes from the trusted binding, never from model input.
+    expect(forget).toHaveBeenCalledWith('alice', 'semantic', '507f1f77bcf86cd799439011')
     expect(out.output).toMatch(/Memory marked for deletion/)
   })
 

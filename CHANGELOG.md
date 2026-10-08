@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-10-06
+
+Security hardening from the product-security threat model (P0-1: finding #3
+"memory is not isolated between users and sessions", and #9 prompt injection).
+
+### Security
+- **Owner-scoped `forget`.** `memory_forget` (AI SDK tool) and the Eve `forget`
+  tool still run **automatically** (no approval step), but now only within the
+  caller's trusted scope: the update filter is `{ _id, user_id }`. Previously
+  the filter was `{ _id }` only, so a prompt-injected agent that learned another
+  user's document id could delete it. Ids owned by another scope — and
+  malformed ids — now report "not found" and modify nothing.
+- **Owner-scoped `scratchpadPromote`.** Only a note owned by the caller (and
+  not already promoted) can be promoted. Previously any note id could be copied
+  into the caller's episodic memory, leaking its content across users.
+- **Session and scratchpad reads filter by `user_id` + `session_id`.**
+  `sessionRecent`, `scratchpadRead`, and `loadSession` previously filtered by
+  `session_id` only, so a guessed or client-supplied session id exposed another
+  user's conversation.
+- **Fail-closed scope.** Every public store method rejects a missing or empty
+  `userId` / `sessionId`. `mongodbMemory()` no longer falls back to a shared
+  `'default'` bucket — it throws when no scope can be resolved.
+- Tool description now tells the model that retrieved memory is user-provided
+  data (not instructions) and to never store secrets (Eve / AI SDK guidance).
+
+### Added
+- `allowSharedDefaultScope` option (default `false`) — demo-only opt-in to the
+  legacy shared `'default'` userId / sessionId.
+- Owner-first indexes `session_user_seq` (`{ user_id, session_id, seq: -1 }`)
+  and `scratchpad_user_session` (`{ user_id, session_id, created_at: -1 }`)
+  backing the scoped reads. Created by `bootstrap()`; existing indexes are kept.
+
+### Changed — BREAKING
+Store method signatures now take the owner scope first:
+
+| Before (0.5) | After (0.6) |
+|---|---|
+| `store.forget(type, id)` | `store.forget(userId, type, id)` |
+| `store.sessionRecent(sessionId, limit?)` | `store.sessionRecent(userId, sessionId, limit?)` |
+| `store.scratchpadRead(sessionId)` | `store.scratchpadRead(userId, sessionId)` |
+
+`mongodbMemory()` with no `userId` / `sessionId` (and no creation-time
+defaults) now throws. Pass scope per call from your verified server-side auth
+session, or set `allowSharedDefaultScope: true` for single-user demos.
+
+The tool schema and the Eve provider API are unchanged — only direct
+`store.*` callers need to update.
+
+### Fixed
+- **Session hooks work on AI SDK v7.** AI SDK v7 renamed
+  `experimental_context` to `runtimeContext` (and `onFinish` to `onEnd`). The
+  context-mode `onFinish()` hook only read `experimental_context`, so on v7 it
+  silently saved **no transcript**; it only logged a warning. It now reads
+  `finalStep.runtimeContext`, `runtimeContext`, and `experimental_context`,
+  so it works on v6 and v7. On v7, return `runtimeContext` from `prepareCall`
+  and pass the hook as `onEnd` (see README). Closure mode was unaffected.
+- **Atomic `scratchpadPromote`.** The note is claimed with a single
+  owner-scoped `findOneAndUpdate` before the episodic write, so concurrent
+  promotions of the same note produce exactly one episodic memory. If the
+  episodic write fails, the claim is released.
+- **`episodicExists` owner scope cannot be overridden.** The trusted
+  `user_id` is now applied after the caller's filter, so a `user_id` key in
+  the filter can no longer replace the scope.
+- Root package type exports now point to the generated ESM (`index.d.mts`)
+  and CommonJS (`index.d.ts`) declarations instead of a missing `index.d.cts`.
+- Release tests validate built package exports and Eve dependency isolation.
+
+### CI
+- New `CI` GitHub Actions workflow runs lint, build, unit, and integration
+  tests against a local Atlas service (`mongodb/mongodb-atlas-local`) on every
+  pull request and push to `main`.
+- `ci/ai-ml-pipeline-testing/` contains the `vercel-ai-memory-js` test
+  definition for MongoDB's `ai-ml-pipeline-testing` Evergreen project.
+
+### Documentation
+- New README section **"Connection string & secrets"**: production guidance
+  for storing `MONGODB_URI` as a **Vercel Secret** (write-only) — via the
+  MongoDB Atlas Vercel integration or `vercel env add` — with per-environment
+  credentials, server-only access (no `NEXT_PUBLIC_`), least-privilege Atlas
+  users, network access lists, a zero-downtime rotation procedure, and an
+  optional lazy `getMemory()` pattern so the URI isn't read at build time.
+  Addresses threat-model finding #5 (connection secret in plain environment
+  variables). The same guidance was added to the Eve section and the
+  `examples/eve-grove` README. No code changes — the package already receives
+  the URI as a value and never reads `process.env` itself.
+
 ## [0.5.0] — 2026-09-15
 
 ### Added

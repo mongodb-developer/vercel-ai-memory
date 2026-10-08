@@ -10,7 +10,7 @@ import { resolve } from 'node:path'
  * while the Eve bundle (dist/eve/index.*) externalizes it. Skips gracefully if
  * the project has not been built yet.
  */
-const dist = resolve(__dirname, '../../dist')
+const dist = resolve(__dirname, '../../../dist')
 
 function read(p: string): string | null {
   const full = resolve(dist, p)

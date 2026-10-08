@@ -36,6 +36,15 @@ function defaultStats(): UsageStats {
 /** TTL index name convention for the always-on expire_at index. */
 const EXPIRE_AT_INDEX_NAME = 'expire_at_ttl'
 
+/** All valid memory types — used to reject unknown types at the store boundary. */
+const MEMORY_TYPES: readonly MemoryType[] = [
+  'session',
+  'semantic',
+  'procedural',
+  'episodic',
+  'scratchpad',
+]
+
 /**
  * MongoDB-backed store for all 5 memory types:
  * Session, Semantic, Procedural, Episodic, Scratchpad.
@@ -116,6 +125,20 @@ export class MongoMemoryStore {
   /** Return true if the given memory type is enabled. */
   private _enabled(type: MemoryType): boolean {
     return !this.config.disabled.has(type)
+  }
+
+  /**
+   * Fail closed on a missing / empty scope identifier. Scope values
+   * (`userId`, `sessionId`) partition every read and write, so an empty value
+   * would silently collapse users into a shared bucket.
+   */
+  private _assertScope(name: 'userId' | 'sessionId', value: unknown): asserts value is string {
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new Error(
+        `[mongodb-memory] \`${name}\` is required and must be a non-empty string ` +
+          '(derive it from your trusted, server-side auth context).'
+      )
+    }
   }
 
   /** True when this store uses Atlas Automated Embedding (server-side vectors). */
@@ -202,12 +225,21 @@ export class MongoMemoryStore {
       )
       await this.session.createIndex({ session_id: 1, seq: -1 }, { background: true })
       await this.session.createIndex({ session_id: 1, role: 1 }, { background: true })
+      // Owner-first index backing the user-scoped session reads.
+      await this.session.createIndex(
+        { user_id: 1, session_id: 1, seq: -1 },
+        { background: true, name: 'session_user_seq' }
+      )
     }
 
     if (this._enabled('scratchpad')) {
       await this._applyDecayIndex(asDoc(this.scratchpad), 'scratchpad', this.config.retention.scratchpad)
       await this._ensureExpireAtIndex(asDoc(this.scratchpad))
       await this.scratchpad.createIndex({ session_id: 1, created_at: -1 }, { background: true })
+      await this.scratchpad.createIndex(
+        { user_id: 1, session_id: 1, created_at: -1 },
+        { background: true, name: 'scratchpad_user_session' }
+      )
     }
 
     if (this._enabled('semantic')) {
@@ -493,6 +525,8 @@ export class MongoMemoryStore {
     sessionId: string,
     turns: SessionAppendInput[]
   ): Promise<void> {
+    this._assertScope('userId', userId)
+    this._assertScope('sessionId', sessionId)
     if (!this._enabled('session')) {
       throw new Error('[mongodb-memory] Session memory is disabled')
     }
@@ -527,11 +561,23 @@ export class MongoMemoryStore {
     )
   }
 
-  async sessionRecent(sessionId: string, limit = this.config.defaults.sessionRecentLimit): Promise<SessionMemory[]> {
+  /**
+   * Most recent turns of a session, in chronological order.
+   *
+   * Scoped by **both** `userId` and `sessionId`: a caller that knows (or
+   * guesses) another user's session id still gets nothing back.
+   */
+  async sessionRecent(
+    userId: string,
+    sessionId: string,
+    limit = this.config.defaults.sessionRecentLimit
+  ): Promise<SessionMemory[]> {
+    this._assertScope('userId', userId)
+    this._assertScope('sessionId', sessionId)
     if (!this._enabled('session')) return []
     const docs = await this.session
       .find(
-        { session_id: sessionId },
+        { user_id: userId, session_id: sessionId },
         { projection: { embedding: 0 }, sort: { seq: -1 }, limit }
       )
       .toArray()
@@ -546,6 +592,7 @@ export class MongoMemoryStore {
     description: string,
     opts?: { importance?: number; tags?: string[] }
   ): Promise<void> {
+    this._assertScope('userId', userId)
     if (!this._enabled('semantic')) {
       throw new Error('[mongodb-memory] Semantic memory is disabled')
     }
@@ -611,6 +658,7 @@ export class MongoMemoryStore {
     query: string,
     limit = this.config.defaults.searchLimit
   ): Promise<SemanticMemory[]> {
+    this._assertScope('userId', userId)
     if (!this._enabled('semantic')) return []
     const stage = await this._vectorSearchStage('semantic', query, limit, {
       user_id: { $eq: userId },
@@ -640,6 +688,7 @@ export class MongoMemoryStore {
       source?: ProceduralMemory['source']
     }
   ): Promise<void> {
+    this._assertScope('userId', userId)
     if (!this._enabled('procedural')) {
       throw new Error('[mongodb-memory] Procedural memory is disabled')
     }
@@ -706,6 +755,7 @@ export class MongoMemoryStore {
     query: string,
     limit = this.config.defaults.searchLimit
   ): Promise<ProceduralMemory[]> {
+    this._assertScope('userId', userId)
     if (!this._enabled('procedural')) return []
     const stage = await this._vectorSearchStage('procedural', query, limit, {
       user_id: { $eq: userId },
@@ -735,6 +785,7 @@ export class MongoMemoryStore {
       context?: Record<string, unknown>
     }
   ): Promise<ObjectId> {
+    this._assertScope('userId', userId)
     if (!this._enabled('episodic')) {
       throw new Error('[mongodb-memory] Episodic memory is disabled')
     }
@@ -768,14 +819,18 @@ export class MongoMemoryStore {
   /**
    * Return true if at least one episodic doc for `userId` matches `filter`.
    * Used by the Eve adapter to make replayed captures idempotent.
+   *
+   * The owner scope is applied last, so a `user_id` key inside `filter` can
+   * never widen or replace the caller's scope.
    */
   async episodicExists(
     userId: string,
     filter: Record<string, unknown>
   ): Promise<boolean> {
+    this._assertScope('userId', userId)
     if (!this._enabled('episodic')) return false
     const doc = await this.episodic.findOne(
-      { user_id: userId, ...filter } as Filter<EpisodicMemory>,
+      { ...filter, user_id: userId } as Filter<EpisodicMemory>,
       { projection: { _id: 1 } }
     )
     return doc !== null
@@ -786,6 +841,7 @@ export class MongoMemoryStore {
     query: string,
     limit = this.config.defaults.searchLimit
   ): Promise<EpisodicMemory[]> {
+    this._assertScope('userId', userId)
     if (!this._enabled('episodic')) return []
     const stage = await this._vectorSearchStage('episodic', query, limit, {
       user_id: { $eq: userId },
@@ -806,6 +862,8 @@ export class MongoMemoryStore {
   // ─── Scratchpad Memory ───────────────────────────────────────────────────────
 
   async scratchpadWrite(userId: string, sessionId: string, note: string): Promise<ObjectId> {
+    this._assertScope('userId', userId)
+    this._assertScope('sessionId', sessionId)
     if (!this._enabled('scratchpad')) {
       throw new Error('[mongodb-memory] Scratchpad memory is disabled')
     }
@@ -828,11 +886,14 @@ export class MongoMemoryStore {
     return id
   }
 
-  async scratchpadRead(sessionId: string): Promise<ScratchpadMemory[]> {
+  /** Unpromoted scratchpad notes for a session, scoped by `userId` + `sessionId`. */
+  async scratchpadRead(userId: string, sessionId: string): Promise<ScratchpadMemory[]> {
+    this._assertScope('userId', userId)
+    this._assertScope('sessionId', sessionId)
     if (!this._enabled('scratchpad')) return []
     return this.scratchpad
       .find(
-        { session_id: sessionId, promoted: false },
+        { user_id: userId, session_id: sessionId, promoted: false },
         { sort: { created_at: 1 } }
       )
       .toArray()
@@ -844,17 +905,38 @@ export class MongoMemoryStore {
     eventType: string,
     opts?: { importance?: number; context?: Record<string, unknown> }
   ): Promise<{ episodicId: ObjectId }> {
+    this._assertScope('userId', userId)
     if (!this._enabled('scratchpad')) {
       throw new Error('[mongodb-memory] Scratchpad memory is disabled')
     }
-    const doc = await this.scratchpad.findOne({ _id: new ObjectId(scratchpadId) })
+    // Atomically claim an unpromoted note owned by the caller. A note belonging
+    // to another user is reported as "not found" (never promoted, never leaked
+    // into this user's episodic memory), and concurrent promotions of the same
+    // note cannot both succeed.
+    const doc = ObjectId.isValid(scratchpadId)
+      ? await this.scratchpad.findOneAndUpdate(
+          { _id: new ObjectId(scratchpadId), user_id: userId, promoted: false },
+          { $set: { promoted: true } },
+          { returnDocument: 'before' }
+        )
+      : null
     if (!doc) throw new Error(`Scratchpad note ${scratchpadId} not found`)
 
-    const episodicId = await this.episodicSave(userId, eventType, doc.note, opts)
+    let episodicId: ObjectId
+    try {
+      episodicId = await this.episodicSave(userId, eventType, doc.note, opts)
+    } catch (err) {
+      // Release the claim so the note can be promoted again later.
+      await this.scratchpad.updateOne(
+        { _id: doc._id, user_id: userId, promoted_to_id: { $exists: false } },
+        { $set: { promoted: false } }
+      )
+      throw err
+    }
 
     await this.scratchpad.updateOne(
-      { _id: doc._id },
-      { $set: { promoted: true, promoted_to_id: episodicId } }
+      { _id: doc._id, user_id: userId },
+      { $set: { promoted_to_id: episodicId } }
     )
 
     return { episodicId }
@@ -866,15 +948,26 @@ export class MongoMemoryStore {
    * Mark a document for near-immediate deletion by setting `expire_at` to now.
    * The always-on `{ expire_at: 1 }` TTL index reaps it within ~60s.
    *
-   * @returns true if the doc was found and marked, false otherwise.
+   * Runs automatically (no approval step) but is **owner-scoped**: the update
+   * filter is `{ _id, user_id }`, so a caller can only ever forget memories
+   * that belong to its own trusted scope. An id owned by another user — or a
+   * malformed id — is reported as "not found" and nothing is modified.
+   *
+   * @param userId Trusted owner scope (server-side userId / Eve scope key).
+   * @returns true if a doc owned by `userId` was found and marked, false otherwise.
    */
-  async forget(type: MemoryType, id: string): Promise<boolean> {
+  async forget(userId: string, type: MemoryType, id: string): Promise<boolean> {
+    this._assertScope('userId', userId)
+    if (!MEMORY_TYPES.includes(type)) {
+      throw new Error(`[mongodb-memory] Unknown memory type "${String(type)}"`)
+    }
     if (!this._enabled(type)) {
       throw new Error(`[mongodb-memory] "${type}" memory is disabled`)
     }
+    if (typeof id !== 'string' || !ObjectId.isValid(id)) return false
     const collection = this._collectionFor(type)
     const result = await collection.updateOne(
-      { _id: new ObjectId(id) } as Filter<Record<string, unknown>>,
+      { _id: new ObjectId(id), user_id: userId } as Filter<Record<string, unknown>>,
       { $set: { expire_at: new Date() } }
     )
     return result.matchedCount > 0
