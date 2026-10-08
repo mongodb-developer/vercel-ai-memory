@@ -64,7 +64,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # ai@7 requires Node >= 22.
+          node-version: '22'
 
       - name: Install dependencies with AI SDK v7
         run: |
