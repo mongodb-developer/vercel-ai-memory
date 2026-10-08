@@ -43,8 +43,12 @@ const mongodbMemory = createMongoDBMemory({
 
 // ── 2. Reusable agent with deterministic session wiring ──────────────────────
 //
-// `onFinish` is set ONCE at construction (ToolLoopAgent only accepts it there)
-// and reads per-call scope from `experimental_context` on each generate() call.
+// The end hook is set ONCE at construction (ToolLoopAgent only accepts it there)
+// and reads per-call scope from the context returned by prepareCall.
+//
+// This example uses AI SDK v6 names. On AI SDK v7, rename:
+//   experimental_context → runtimeContext   (v7 ignores experimental_context)
+//   onFinish             → onEnd            (onFinish is a deprecated alias)
 //
 const agent = new ToolLoopAgent({
   model: openai('gpt-4o-mini'),
@@ -69,9 +73,8 @@ const agent = new ToolLoopAgent({
       tools: mongodbMemory({ userId, sessionId }),
       // Prepend restored history, then the new user turn.
       messages: [...history, { role: 'user', content: prompt }],
-      // `experimental_context` is the ONLY way to pass per-call state to
-      // `onFinish` since ToolLoopAgent only accepts `onFinish` at construction.
-      // Our hook reads userId/sessionId/prompt from here.
+      // Per-call scope for the end hook (v7: `runtimeContext`). Our hook reads
+      // userId/sessionId/prompt from here.
       experimental_context: { userId, sessionId, prompt },
       instructions: `You are a helpful assistant with persistent long-term memory.
 
@@ -86,7 +89,7 @@ session_append or session_recent; they're not available. Respond naturally.`,
   },
 
   // Deterministic write: every user/assistant/tool turn lands in Mongo,
-  // scoped per-call via experimental_context below.
+  // scoped per call via the context above (v7: `onEnd`).
   onFinish: mongodbMemory.onFinish(),
 
   stopWhen: isLoopFinished(),

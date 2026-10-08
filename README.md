@@ -109,13 +109,15 @@ const agent = new ToolLoopAgent({
       ...settings,
       tools: mongodbMemory({ userId, sessionId }),
       messages: [...history, { role: 'user', content: prompt }],
-      // per-call state flows to onFinish via experimental_context
-      experimental_context: { userId, sessionId, prompt },
+      // Per-call scope for the end hook. AI SDK v7 key; on v6 use
+      // `experimental_context` instead (see the table below).
+      runtimeContext: { userId, sessionId, prompt },
     }
   },
 
   // ── POST hook: write every turn exactly once ────────────────────────────────
-  onFinish: mongodbMemory.onFinish(),
+  // AI SDK v7 name; on v6 use `onFinish` instead.
+  onEnd: mongodbMemory.onFinish(),
 
   stopWhen: isLoopFinished(),
 })
@@ -139,7 +141,16 @@ transcript/audit records, but they are not replayed as provider `tool-result` bl
 OpenAI Responses and Anthropic Messages reject orphan tool results without the matching prior
 assistant tool call.
 
-**Why `experimental_context`?** `ToolLoopAgent` only accepts `onFinish` at construction time, but you still need per-call scope (`userId`, `sessionId`, `prompt`). The hook reads those from `event.experimental_context`, which you set inside `prepareCall`. You can also call `mongodbMemory.onFinish({ userId, sessionId, prompt })` with a baked-in closure when using one-shot `generateText` / `streamText`.
+**Why pass a context?** `ToolLoopAgent` only accepts its end callback at construction, but you still need per-call scope (`userId`, `sessionId`, `prompt`). Return that scope from `prepareCall`; the hook reads it from the end event. The key and callback names differ by AI SDK major:
+
+| AI SDK | Return from `prepareCall` | End callback |
+|---|---|---|
+| **v7** | `runtimeContext: { userId, sessionId, prompt }` | `onEnd: mongodbMemory.onFinish()` |
+| **v6** | `experimental_context: { userId, sessionId, prompt }` | `onFinish: mongodbMemory.onFinish()` |
+
+> **Upgrading from v6 to v7?** Rename `experimental_context` to `runtimeContext`. On v7, `experimental_context` is ignored, so before 0.6.0 the hook saved nothing and only logged a warning. 0.6.0 reads both keys, but v7 only forwards `runtimeContext`. v7 also still accepts `onFinish` as a deprecated alias of `onEnd`.
+
+You can also bake scope into a closure with `mongodbMemory.onFinish({ userId, sessionId, prompt })`. That needs no per-call context, but because the scope is fixed at creation time you must build the callback (and therefore a `ToolLoopAgent`) per request. It suits one-shot `generateText` / `streamText` calls.
 
 See `examples/deterministic-agent.ts` for the full runnable example.
 

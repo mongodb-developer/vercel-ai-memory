@@ -48,3 +48,35 @@ jobs:
         run: npm run test:integration
         env:
           MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+
+  ai-sdk-v7:
+    # The peer range is `ai ^6 || ^7`, but the dev dependency is v6. Run the
+    # typecheck and unit tests (including the real-ToolLoopAgent session-hook
+    # test) against v7 so its breaking renames can't slip through silently.
+    name: Lint & unit tests (AI SDK v7)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies with AI SDK v7
+        run: |
+          npm ci
+          npm install --no-save ai@^7
+          node -p "'ai@' + require('ai/package.json').version"
+
+      - name: Lint (typecheck)
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test

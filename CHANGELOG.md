@@ -54,6 +54,13 @@ The tool schema and the Eve provider API are unchanged — only direct
 `store.*` callers need to update.
 
 ### Fixed
+- **Session hooks work on AI SDK v7.** AI SDK v7 renamed
+  `experimental_context` to `runtimeContext` (and `onFinish` to `onEnd`). The
+  context-mode `onFinish()` hook only read `experimental_context`, so on v7 it
+  silently saved **no transcript**; it only logged a warning. It now reads
+  `finalStep.runtimeContext`, `runtimeContext`, and `experimental_context`,
+  so it works on v6 and v7. On v7, return `runtimeContext` from `prepareCall`
+  and pass the hook as `onEnd` (see README). Closure mode was unaffected.
 - **Atomic `scratchpadPromote`.** The note is claimed with a single
   owner-scoped `findOneAndUpdate` before the episodic write, so concurrent
   promotions of the same note produce exactly one episodic memory. If the
