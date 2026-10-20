@@ -46,7 +46,7 @@ jobs:
     if: needs.tag.outputs.created == 'true'
     uses: ./.github/workflows/publish.yml
     permissions:
-      contents: read
+      contents: write  # attach-signatures creates the release and uploads assets
       id-token: write
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

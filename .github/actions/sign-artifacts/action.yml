@@ -1,0 +1,83 @@
+name: Sign artifacts with Garasign
+description: >-
+  Create an armored, detached GPG signature (<file>.sig) for each file in a
+  directory using the Garasign gpg container, then verify each signature
+  before returning. Requires release-setup to have run first. Adapted from
+  mongodb-developer/claude-agent-sdk-mongodb-session-store#8.
+
+inputs:
+  path:
+    description: Directory whose files should each receive a detached signature.
+    required: true
+  ecr_registry:
+    description: ECR registry that hosts the Garasign images.
+    default: "901841024863.dkr.ecr.us-east-1.amazonaws.com"
+  ecr_repository:
+    description: Garasign gpg image repository.
+    default: release-infrastructure/garasign-gpg
+
+outputs:
+  signature-path:
+    description: Directory containing the generated .sig files.
+    value: ${{ steps.sign.outputs.signature-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create and verify detached signatures
+      id: sign
+      shell: bash
+      env:
+        ECR_REGISTRY: ${{ inputs.ecr_registry }}
+        ECR_REPOSITORY: ${{ inputs.ecr_repository }}
+        ARTIFACT_PATH: ${{ inputs.path }}
+      run: |
+        set -eu
+        GARASIGN_ENVFILE="${RUNNER_TEMP}/garasign-envfile"  # written by release-setup
+        if [ ! -s "$GARASIGN_ENVFILE" ]; then
+          echo "::error::No Garasign credentials found; run release-setup before sign-artifacts"
+          exit 1
+        fi
+
+        files=()
+        while IFS= read -r -d '' f; do
+          case "$f" in *.sig) continue ;; esac
+          files+=("$f")
+        done < <(find "$ARTIFACT_PATH" -maxdepth 1 -type f -print0)
+
+        if [ "${#files[@]}" -eq 0 ]; then
+          echo "::error::No files found in $ARTIFACT_PATH"
+          exit 1
+        fi
+
+        # Signing command follows the Garasign doc (gpgloader, then gpg --detach-sign).
+        # Each signature is verified inside the same container, where gpgloader has put the
+        # public key in the keyring. If GPG_KEY_ID is set, the signing key must match it.
+        docker run --rm \
+          --env-file="$GARASIGN_ENVFILE" \
+          -v "$(pwd):$(pwd)" \
+          -w "$(pwd)" \
+          "${ECR_REGISTRY}/${ECR_REPOSITORY}" \
+          /bin/bash -c '
+            set -euo pipefail
+            expected=$(printf "%s" "$1" | tr "[:lower:]" "[:upper:]"); shift
+            gpgloader
+            for f in "$@"; do
+              gpg --yes -v --armor --output "$f.sig" --detach-sign "$f"
+              fpr=$(gpg --status-fd 1 --verify "$f.sig" "$f" | awk "\$2 == \"VALIDSIG\" { print \$3 }") || fpr=""
+              if [ -z "$fpr" ]; then
+                echo "::error::Signature for $f did not verify"; exit 1
+              fi
+              case "$fpr" in
+                *"$expected") echo "Verified $f (key $fpr)" ;;
+                *) echo "::error::$f was signed by $fpr, expected key $expected"; exit 1 ;;
+              esac
+            done
+          ' _ "${GPG_KEY_ID:-}" "${files[@]}"
+
+        echo "signature-path=$ARTIFACT_PATH" >> "$GITHUB_OUTPUT"
+
+        echo "### Signed artifacts" >> "$GITHUB_STEP_SUMMARY"
+        for f in "${files[@]}"; do
+          echo "- $(basename "$f") -> $(basename "$f").sig" >> "$GITHUB_STEP_SUMMARY"
+        done

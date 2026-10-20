@@ -1,32 +1,56 @@
 name: Publish to npm
 
+# Build once, sign the exact tarball with Garasign, publish that tarball to npm, then attach the
+# tarball, its detached signature and SHA256SUMS to the GitHub Release so users can verify it.
+# Design follows mongodb-developer/claude-agent-sdk-mongodb-session-store#8.
+#
+# One-time setup before the sign job can run:
+#   - GitHub environment `release-signing` (with required reviewers) holding secrets
+#     AWS_SIGNING_ROLE_ARN, AWS_SIGNING_REGION, AWS_SIGNING_SECRET_ID
+#   - AWS Secrets Manager secret with garasign-username, garasign-password and (optional) gpg-key-id
+#   - AWS role trust policies updated for this repo's OIDC subject (the signing-secrets role and
+#     the ecr-role-gha-ro pull role)
+#
+# Manual runs default to a dry run: build and sign, but never publish or touch a release.
+
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and sign only; skip npm publish and the GitHub Release'
+        type: boolean
+        default: true
   workflow_call:
     secrets:
       NPM_TOKEN:
         required: true
 
+permissions:
+  contents: read
+
 jobs:
-  publish:
-    name: Build & publish
+  build:
+    name: Build & pack
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write  # required for npm provenance
+    timeout-minutes: 15
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      version: ${{ steps.pack.outputs.version }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: npm ci
@@ -40,7 +64,132 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Pack once so the tarball that is signed is the exact tarball that is published.
+      - name: Pack tarball
+        id: pack
+        run: |
+          version=$(jq -r '.version' package.json)
+          if [ "${GITHUB_REF_TYPE:-}" = tag ] && [ "${GITHUB_REF_NAME:-}" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version v$version"
+            exit 1
+          fi
+          mkdir dist-pack
+          tarball=$(npm pack --json --pack-destination dist-pack | jq -r '.[0].filename')
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist-pack/
+          if-no-files-found: error
+
+  sign:
+    name: Sign tarball
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-signing
+    permissions:
+      contents: read
+      id-token: write  # assume the AWS roles via OIDC
+
+    steps:
+      # Local composite actions are read from the checked-out repo.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist-pack/
+
+      # `./` is the documented local-action syntax; zizmor's `$/` suggestion is not yet in real use.
+      - name: Set up signing credentials
+        uses: ./.github/actions/release-setup # zizmor: ignore[self-repository]
+        with:
+          aws_role_arn: ${{ secrets.AWS_SIGNING_ROLE_ARN }}
+          aws_region: ${{ secrets.AWS_SIGNING_REGION }}
+          aws_secret_id: ${{ secrets.AWS_SIGNING_SECRET_ID }}
+
+      - name: Sign and verify tarball
+        uses: ./.github/actions/sign-artifacts # zizmor: ignore[self-repository]
+        with:
+          path: dist-pack/
+
+      - name: Upload signatures
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-signatures
+          path: dist-pack/*.sig
+          if-no-files-found: error
+
+  # Waits for `sign` so an unsigned tarball can never be published.
+  publish:
+    name: Publish to npm
+    needs: [build, sign]
+    if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write  # required for npm provenance
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          package-manager-cache: false
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist-pack/
+
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        run: npm publish "./dist-pack/$TARBALL" --access public --provenance
         env:
+          TARBALL: ${{ needs.build.outputs.tarball }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  attach-signatures:
+    name: Attach signature to the release
+    needs: [build, sign, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write  # create the release and upload assets
+
+    steps:
+      - name: Download tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist-pack/
+
+      - name: Download signatures
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist-signatures
+          path: dist-pack/
+
+      - name: Checksum the signed tarball
+        run: (cd dist-pack && sha256sum -- *.tgz *.sig > SHA256SUMS)
+
+      # tag-on-merge.yml creates the tag but no GitHub Release, so create one if needed.
+      - name: Upload tarball, signature and checksums to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: v${{ needs.build.outputs.version }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 \
+            || gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --generate-notes
+          gh release upload "$RELEASE_TAG" --clobber dist-pack/*.tgz dist-pack/*.sig dist-pack/SHA256SUMS
