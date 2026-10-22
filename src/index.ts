@@ -136,6 +136,11 @@ export interface MongoDBMemoryInstance {
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
+/** A usable scope id: a string with at least one non-whitespace character. */
+function isNonEmptyScope(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
 /**
  * Creates a MongoDB-backed memory provider for the Vercel AI SDK.
  *
@@ -189,11 +194,15 @@ export function createMongoDBMemory(options: MongoDBMemoryOptions): MongoDBMemor
 
   // ── The callable function ──────────────────────────────────────────────────
   function memoryInstance(callOptions?: MemoryCallOptions) {
-    const userId = callOptions?.userId || config.defaultUserId
-    const sessionId = callOptions?.sessionId || config.defaultSessionId
+    // `??` (not `||`): only an omitted scope falls back to a creation-time
+    // default. An explicitly empty value (e.g. a failed auth lookup yielding
+    // '') must throw below rather than silently land in a default bucket.
+    const userId = callOptions?.userId ?? config.defaultUserId
+    const sessionId = callOptions?.sessionId ?? config.defaultSessionId
 
     // Fail closed: never let an unscoped call land in a shared bucket.
-    if (!userId || !sessionId) {
+    // Mirrors the store's `_assertScope` so bad scopes fail at call time.
+    if (!isNonEmptyScope(userId) || !isNonEmptyScope(sessionId)) {
       throw new Error(
         '[mongodb-memory] mongodbMemory() requires `userId` and `sessionId`. ' +
           'Pass them per call from your trusted server-side auth context, e.g. ' +

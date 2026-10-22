@@ -26,7 +26,9 @@ Security hardening from the product-security threat model (P0-1: finding #3
   user's conversation.
 - **Fail-closed scope.** Every public store method rejects a missing or empty
   `userId` / `sessionId`. `mongodbMemory()` no longer falls back to a shared
-  `'default'` bucket — it throws when no scope can be resolved.
+  `'default'` bucket — it throws when no scope can be resolved. An explicitly
+  empty / whitespace / non-string per-call scope also throws; only an omitted
+  (`undefined`) scope falls back to a creation-time default.
 - Tool description now tells the model that retrieved memory is user-provided
   data (not instructions) and to never store secrets (Eve / AI SDK guidance).
 

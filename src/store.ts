@@ -131,6 +131,12 @@ export class MongoMemoryStore {
    * Fail closed on a missing / empty scope identifier. Scope values
    * (`userId`, `sessionId`) partition every read and write, so an empty value
    * would silently collapse users into a shared bucket.
+   *
+   * `value` is typed `unknown` on purpose: this is a runtime guard. TS types
+   * are erased, and these public methods are reachable from plain JS or
+   * `any`-typed input (request bodies, external principals). A non-string such
+   * as `{ $ne: null }` would otherwise become a query operator matching every
+   * owner. `asserts value is string` narrows the type for the caller.
    */
   private _assertScope(name: 'userId' | 'sessionId', value: unknown): asserts value is string {
     if (typeof value !== 'string' || value.trim() === '') {
@@ -532,7 +538,14 @@ export class MongoMemoryStore {
     }
     if (turns.length === 0) return
 
-    // Get next seq number
+    // Get next seq number.
+    // Intentionally keyed by `session_id` only (not `user_id`): seq is
+    // allocated per session to match the `session_seq_unique` index on
+    // `{ session_id, seq }`. Adding `user_id` here would let two owners sharing
+    // a session id compute colliding seqs and hit duplicate-key errors. Reads
+    // (`sessionRecent`) are scoped by `user_id` + `session_id`, so no content
+    // crosses owners. Moving to per-owner seq requires migrating that unique
+    // index to `{ user_id, session_id, seq }` — tracked as a follow-up.
     const last = await this.session
       .find({ session_id: sessionId }, { projection: { seq: 1 }, sort: { seq: -1 }, limit: 1 })
       .toArray()
