@@ -34,11 +34,11 @@ jobs:
       - name: Lint (typecheck)
         run: npm run lint
 
-      - name: Unit tests
-        run: npm test
-
       - name: Build
         run: npm run build
+
+      - name: Unit tests (including built package checks)
+        run: npm test
 
       - name: Publish to npm
         run: npm publish --access public --provenance

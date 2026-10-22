@@ -88,9 +88,52 @@ describe('createMongoDBMemory factory', () => {
     expect(typeof memory.close).toBe('function')
   })
 
-  it('uses default userId/sessionId when not provided', () => {
-    const tools = memory()  // no options
-    expect(tools).toHaveProperty('memory')
+  it('throws when no userId/sessionId can be resolved (fail closed)', () => {
+    expect(() => memory()).toThrowError(/requires `userId` and `sessionId`/)
+    expect(() => memory({ userId: 'alice' })).toThrowError(/requires `userId` and `sessionId`/)
+    expect(() => memory({ userId: '', sessionId: 's' })).toThrowError(/requires/)
+  })
+
+  it('an explicitly empty per-call scope never falls back to a creation-time default', async () => {
+    const withDefaults = createMongoDBMemory({
+      uri: TEST_URI,
+      embedder: mockEmbedder,
+      userId: 'default-user',
+      sessionId: 'default-session',
+    })
+    expect(() => withDefaults({ userId: '', sessionId: 's' })).toThrowError(/requires/)
+    expect(() => withDefaults({ userId: '   ', sessionId: 's' })).toThrowError(/requires/)
+    expect(() => withDefaults({ userId: 'alice', sessionId: '' })).toThrowError(/requires/)
+    // Omitted (undefined) scope still uses the creation-time defaults.
+    expect(withDefaults()).toHaveProperty('memory')
+    expect(withDefaults({ userId: 'alice' })).toHaveProperty('memory')
+    await withDefaults.close()
+  })
+
+  it('an explicitly empty scope never falls back to the shared default bucket', async () => {
+    const legacy = createMongoDBMemory({
+      uri: TEST_URI,
+      embedder: mockEmbedder,
+      allowSharedDefaultScope: true,
+    })
+    expect(() => legacy({ userId: '', sessionId: 's' })).toThrowError(/requires/)
+    await legacy.close()
+  })
+
+  it('rejects non-string scope values at call time', () => {
+    const bad = { $ne: null } as unknown as string
+    expect(() => memory({ userId: bad, sessionId: 's' })).toThrowError(/requires/)
+  })
+
+  it('allowSharedDefaultScope: true restores the legacy shared default bucket', async () => {
+    const legacy = createMongoDBMemory({
+      uri: TEST_URI,
+      embedder: mockEmbedder,
+      allowSharedDefaultScope: true,
+    })
+    expect(legacy()).toHaveProperty('memory')
+    expect(legacy.config.defaultUserId).toBe('default')
+    await legacy.close()
   })
 
   it('different calls with different userId produce distinct tool instances', () => {

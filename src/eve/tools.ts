@@ -104,10 +104,14 @@ export function createTools(deps: ToolsDeps) {
       },
     })
 
+    // Runs automatically (no approval), but only inside the locked Eve scope:
+    // the store filters on `{ _id, user_id: scope }`, so the model can never
+    // forget another principal's memory — it only ever supplies id + tier.
     const forget = defineTool({
       description:
         'Delete a previously remembered memory by its id and tier ' +
-        '(e.g. when the user says "forget that" or a memory is wrong).',
+        '(e.g. when the user says "forget that" or a memory is wrong). ' +
+        'Only memories of the current user can be deleted.',
       inputSchema: z.object({
         id: z.string().describe('The memory document id to forget.'),
         type: z
@@ -116,7 +120,10 @@ export function createTools(deps: ToolsDeps) {
       }),
       async execute(input: { id: string; type: MemoryType }) {
         await ensureConnected()
-        const found = await store.forget(input.type, input.id)
+        if (!tiers[input.type as keyof typeof tiers]) {
+          return { forgotten: false, id: input.id, type: input.type, reason: `Memory tier "${input.type}" is disabled.` }
+        }
+        const found = await store.forget(scope, input.type, input.id)
         return { forgotten: found, id: input.id, type: input.type }
       },
     })

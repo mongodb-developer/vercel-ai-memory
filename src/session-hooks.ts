@@ -32,11 +32,18 @@ export interface SessionHookOptions {
 
 // Re-export the ToolLoopAgent onFinish callback shape without importing `ai`
 // as a hard dependency — we keep `ai` peer-only. The shape below matches
-// `OnFinishEvent` (StepResult + steps[] + experimental_context).
+// the end event of both AI SDK majors:
+//   - v6: `OnFinishEvent` with `experimental_context`
+//   - v7: `GenerateTextEndEvent` with `runtimeContext` (and `finalStep.runtimeContext`)
 // We accept a widened shape because we don't want to import TOOLS generics.
 type AnyOnFinishEvent = {
   steps: ReadonlyArray<AnyStepResult>
+  /** AI SDK v6 per-call context. */
   experimental_context?: unknown
+  /** AI SDK v7 per-call context (deprecated alias of `finalStep.runtimeContext`). */
+  runtimeContext?: unknown
+  /** AI SDK v7 final step, which carries the canonical `runtimeContext`. */
+  finalStep?: { runtimeContext?: unknown }
   response?: { messages?: ReadonlyArray<ResponseMessageLike> }
 } & Record<string, unknown>
 
@@ -50,11 +57,32 @@ type AnyStepResult = {
 type ResponseMessageLike = AssistantModelMessage | ToolModelMessage
 
 /**
- * The callable returned by `createOnFinish`. Compatible with
- * `ToolLoopAgentOnFinishCallback`, `GenerateTextOnFinishCallback`, and
- * `StreamTextOnFinishCallback` in the Vercel AI SDK.
+ * The callable returned by `createOnFinish`. Compatible with the end-of-
+ * generation callback of `ToolLoopAgent`, `generateText`, and `streamText` in
+ * AI SDK v6 (`onFinish`) and v7 (`onEnd`, or its deprecated alias `onFinish`).
  */
 export type OnFinishCallback = (event: AnyOnFinishEvent) => Promise<void>
+
+/**
+ * Read per-call context from an end event, across AI SDK majors. v7 renamed
+ * `experimental_context` to `runtimeContext`; prefer the v7 fields when set.
+ */
+function readCallContext(event: AnyOnFinishEvent): Partial<OnFinishContext> {
+  const candidates = [
+    event.finalStep?.runtimeContext,
+    event.runtimeContext,
+    event.experimental_context,
+  ]
+  for (const c of candidates) {
+    if (c && typeof c === 'object') {
+      const ctx = c as Partial<OnFinishContext>
+      if (ctx.userId !== undefined || ctx.sessionId !== undefined || ctx.prompt !== undefined) {
+        return ctx
+      }
+    }
+  }
+  return {}
+}
 
 // ─── Loader: deterministic history read ───────────────────────────────────────
 
@@ -70,7 +98,7 @@ export async function loadSession(
   store: MongoMemoryStore,
   opts: SessionHookOptions
 ): Promise<ModelMessage[]> {
-  const turns: SessionMemory[] = await store.sessionRecent(opts.sessionId, opts.limit)
+  const turns: SessionMemory[] = await store.sessionRecent(opts.userId, opts.sessionId, opts.limit)
   return turns.flatMap((turn) => {
     const message = sessionTurnToModelMessage(turn)
     return message ? [message] : []
@@ -97,10 +125,10 @@ function sessionTurnToModelMessage(turn: SessionMemory): ModelMessage | null {
 // ─── Writer: deterministic persistence on generation end ──────────────────────
 
 /**
- * Shape that `createOnFinish` looks for in `event.experimental_context` when
- * called without a baked-in scope. Pass this via
- * `agent.generate({ experimental_context })` to let a constructor-level
- * `onFinish` be scoped per-call without re-creating the agent.
+ * Shape that `createOnFinish` looks for in the per-call context when called
+ * without a baked-in scope: `runtimeContext` (AI SDK v7) or
+ * `experimental_context` (AI SDK v6). Return it from `prepareCall` to let a
+ * constructor-level callback be scoped per call without re-creating the agent.
  */
 export interface OnFinishContext {
   userId: string
@@ -125,19 +153,26 @@ export interface OnFinishContext {
  * onFinish: memory.onFinish({ userId, sessionId, prompt })
  * ```
  *
- * **2. Context mode** — read scope from `event.experimental_context`.
- *    Required for `ToolLoopAgent`, which only accepts a single constructor
- *    level `onFinish` but forwards `experimental_context` per call:
+ * **2. Context mode** — read scope from the per-call context. Required for
+ *    `ToolLoopAgent`, which only accepts its end callback at construction but
+ *    forwards context per call. Return the context from `prepareCall` under
+ *    the key your AI SDK major expects:
  * ```ts
- * // construction
- * new ToolLoopAgent({ onFinish: memory.onFinish(), ... })
- * // per call
- * agent.generate({ prompt, experimental_context: { userId, sessionId, prompt } })
+ * // AI SDK v7
+ * new ToolLoopAgent({
+ *   prepareCall: async ({ options, ...s }) => ({ ...s, runtimeContext: { ...options } }),
+ *   onEnd: memory.onFinish(),
+ * })
+ * // AI SDK v6
+ * new ToolLoopAgent({
+ *   prepareCall: async ({ options, ...s }) => ({ ...s, experimental_context: { ...options } }),
+ *   onFinish: memory.onFinish(),
+ * })
  * ```
  *
- * If `opts` is omitted, the hook *requires* an `experimental_context` with at
- * least `{ userId, sessionId }`. If `opts` is provided, any missing fields are
- * still back-filled from the context (context wins per-call if both present).
+ * If `opts` is omitted, the hook *requires* a context with at least
+ * `{ userId, sessionId }`. If `opts` is provided, any missing fields are still
+ * back-filled from the context (context wins per-call if both present).
  *
  * @param store  The MongoMemoryStore.
  * @param opts   Optional static scope (userId, sessionId, prompt) for the writes.
@@ -149,7 +184,7 @@ export function createOnFinish(
   const persistUserPrompt = opts?.persistUserPrompt ?? true
 
   return async (event) => {
-    const ctx = (event.experimental_context ?? {}) as Partial<OnFinishContext>
+    const ctx = readCallContext(event)
 
     const userId = ctx.userId ?? opts?.userId
     const sessionId = ctx.sessionId ?? opts?.sessionId
@@ -159,7 +194,9 @@ export function createOnFinish(
       // eslint-disable-next-line no-console
       console.warn(
         '[mongodb-memory] session onFinish: no userId/sessionId found ' +
-          '(pass them via opts or via `experimental_context` on generate()).'
+          '— nothing was saved. Pass them via opts, or return them from ' +
+          '`prepareCall` as `runtimeContext` (AI SDK v7) or ' +
+          '`experimental_context` (AI SDK v6).'
       )
       return
     }

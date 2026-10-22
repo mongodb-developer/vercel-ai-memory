@@ -66,7 +66,7 @@ describe('loadSession', () => {
     const msgs = await loadSession(store, { userId: 'u', sessionId: 's' })
 
     expect(msgs).toEqual([])
-    expect(store.sessionRecent).toHaveBeenCalledWith('s', undefined)
+    expect(store.sessionRecent).toHaveBeenCalledWith('u', 's', undefined)
   })
 
   it('maps user and assistant turns to the right ModelMessage shape', async () => {
@@ -106,7 +106,7 @@ describe('loadSession', () => {
     store.sessionRecent.mockResolvedValue([])
 
     await loadSession(store, { userId: 'u', sessionId: 's', limit: 10 })
-    expect(store.sessionRecent).toHaveBeenCalledWith('s', 10)
+    expect(store.sessionRecent).toHaveBeenCalledWith('u', 's', 10)
   })
 })
 
@@ -288,6 +288,44 @@ describe('createOnFinish (closure mode)', () => {
 // ─── createOnFinish — context mode (experimental_context) ─────────────────────
 
 describe('createOnFinish (context mode)', () => {
+  const v7Event = (context: Record<string, unknown>, where: 'finalStep' | 'top') => {
+    const event = makeEvent([{ messages: [{ role: 'assistant', content: 'hi' }] }]) as Record<
+      string,
+      unknown
+    >
+    delete event.experimental_context
+    if (where === 'finalStep') event.finalStep = { runtimeContext: context }
+    else event.runtimeContext = context
+    return event as Parameters<OnFinishCallback>[0]
+  }
+
+  it.each(['finalStep', 'top'] as const)(
+    'reads scope from AI SDK v7 runtimeContext (%s)',
+    async (where) => {
+      const store = makeMockStore()
+      await createOnFinish(store)(
+        v7Event({ userId: 'v7-user', sessionId: 'v7-sess', prompt: 'hello' }, where)
+      )
+      expect(store.sessionAppendMany).toHaveBeenCalledWith('v7-user', 'v7-sess', [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' },
+      ])
+    }
+  )
+
+  it('ignores the empty default v7 runtimeContext and falls back to opts', async () => {
+    const store = makeMockStore()
+    // v7 defaults runtimeContext to {} when none is passed.
+    await createOnFinish(store, { userId: 'closure-user', sessionId: 'closure-sess' })(
+      v7Event({}, 'finalStep')
+    )
+    expect(store.sessionAppendMany).toHaveBeenCalledWith(
+      'closure-user',
+      'closure-sess',
+      [{ role: 'assistant', content: 'hi' }]
+    )
+  })
+
   it('reads userId/sessionId/prompt from experimental_context when opts are omitted', async () => {
     const store = makeMockStore()
     const cb = createOnFinish(store) // no opts
