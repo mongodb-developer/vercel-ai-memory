@@ -1,7 +1,11 @@
 /**
  * `@mongodb-developer/vercel-ai-memory/eve`
  *
- * A first-class MongoDB **memory provider for Vercel Eve**, layered on top of
+ * **Not production-ready:** not yet recommended for production use. This subpath is excluded
+ * from the package's semantic-versioning guarantees and may change in a minor
+ * release.
+ *
+ * A MongoDB **memory provider for Vercel Eve**, layered on top of
  * the package's existing MongoDB memory store. Import this subpath only in Eve
  * projects — it is fully isolated from the root AI SDK entrypoint, and `eve` is
  * an optional peer dependency.

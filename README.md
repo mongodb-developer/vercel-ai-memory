@@ -1,11 +1,11 @@
 # `@mongodb-developer/vercel-ai-memory`
 
-MongoDB-backed persistent memory for the [Vercel AI SDK](https://sdk.vercel.ai) and a **first-class memory provider for [Vercel Eve](https://eve.dev)**. Gives your agent five structured memory tiers — **Session**, **Semantic**, **Procedural**, **Episodic**, and **Scratchpad** — all stored in MongoDB Atlas with automatic vector search indexes and per-type retention policies. Bring your own embedding model, or let **Atlas Automated Embedding** (Voyage AI) generate vectors server-side with zero client embedding pipeline.
+MongoDB-backed persistent memory for the [Vercel AI SDK](https://sdk.vercel.ai) and a memory provider for [Vercel Eve](https://eve.dev) (not yet production-ready). Gives your agent five structured memory tiers — **Session**, **Semantic**, **Procedural**, **Episodic**, and **Scratchpad** — all stored in MongoDB Atlas with automatic vector search indexes and per-type retention policies. Bring your own embedding model, or let **Atlas Automated Embedding** (Voyage AI) generate vectors server-side with zero client embedding pipeline.
 
 ## Features
 
 - 🧠 **5 memory types** — session history, entity knowledge, how-to procedures, event episodes, and a temporary scratchpad
-- 🤖 **Vercel Eve provider** — drop-in `mongodbMemory()` for Eve's memory slots via the `/eve` subpath: automatic recall before every turn, automatic or agent-driven capture, and `remember` / `forget` tools — all partitioned by Eve's trusted scope key
+- 🤖 **Vercel Eve provider (not yet production-ready)** — drop-in `mongodbMemory()` for Eve's memory slots via the `/eve` subpath: automatic recall before every turn, automatic or agent-driven capture, and `remember` / `forget` tools — all partitioned by Eve's trusted scope key
 - ⚡ **Atlas Automated Embedding** — opt in with `autoEmbed: { model: 'voyage-4' }` and Atlas embeds your memories server-side (Voyage AI); no embedding API key or client pipeline required
 - 🔍 **Atlas Vector Search** — semantic retrieval powered by any Vercel AI SDK embedding model
 - 📏 **Auto-detected dimensions** — no need to configure vector dimensions; the package probes them at startup
@@ -158,7 +158,9 @@ See `examples/deterministic-agent.ts` for the full runnable example.
 
 ## Vercel Eve
 
-MongoDB is also available as a **first-class [Vercel Eve](https://eve.dev) memory provider** via the additive `/eve` subpath — layered on top of the exact same store, embeddings, vector search, retention, and forgetting logic used by the AI SDK integration.
+> **Not production-ready:** The Eve provider is not yet recommended for production use. The `/eve` subpath is excluded from this package's semantic-versioning guarantees and may change in a minor release. The AI SDK integration (the root import) is unaffected.
+
+MongoDB is also available as a [Vercel Eve](https://eve.dev) memory provider via the additive `/eve` subpath — layered on top of the exact same store, embeddings, vector search, retention, and forgetting logic used by the AI SDK integration.
 
 ```bash
 npm install @mongodb-developer/vercel-ai-memory eve

@@ -16,8 +16,22 @@ import type { EveMemoryTiers, EveMongoMemoryOptions } from './types'
 
 const DRIVER_INFO: DriverInfo = { name: 'vercel-ai-memory-eve', version }
 
+// Eve constructs the provider several times per process, so the
+// not-production-ready notice is tracked at module level and emitted only once.
+let readinessNoticeShown = false
+
+function showReadinessNotice(): void {
+  if (readinessNoticeShown) return
+  readinessNoticeShown = true
+  // eslint-disable-next-line no-console
+  console.info(
+    `[mongodb-memory] The Vercel Eve provider is not yet production-ready ` +
+      `and is not recommended for production use. Its API may change in a minor release.`
+  )
+}
+
 /**
- * Create a MongoDB **Vercel Eve memory provider**.
+ * Create a MongoDB **Vercel Eve memory provider** (not yet production-ready).
  *
  * ```ts
  * import { defineMemory } from 'eve/memory'
@@ -42,6 +56,8 @@ const DRIVER_INFO: DriverInfo = { name: 'vercel-ai-memory-eve', version }
 export function mongodbMemory(
   options: EveMongoMemoryOptions
 ): MemoryProviderDefinition {
+  showReadinessNotice()
+
   const tiers: Required<EveMemoryTiers> = {
     semantic: options.memory?.semantic ?? true,
     episodic: options.memory?.episodic ?? true,
