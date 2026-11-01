@@ -42,16 +42,89 @@ jobs:
       - name: Typecheck
         run: npm run lint
 
-      # Unit tests only: the integration suite needs an Atlas cluster.
+      # Build before the unit tests so the built-package export checks run.
+      - name: Build
+        run: npm run build
+
       - name: Unit tests
         run: npm test
+
+  integration:
+    name: Integration tests (local Atlas)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      atlas:
+        # 8.3.13; Dependabot doesn't cover service images, so bump this by hand.
+        image: mongodb/mongodb-atlas-local@sha256:ca394bdaedef5d802a07f8e00e7734f181ee9b6cc1aacbf09a50fb776657edbf
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "/usr/local/bin/runner healthcheck"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build
         run: npm run build
 
+      - name: Integration tests
+        run: npm run test:integration
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+
+  ai-sdk-v7:
+    # The peer range is `ai ^6 || ^7`, but the dev dependency is v6. Run the
+    # typecheck and unit tests (including the real-ToolLoopAgent session-hook
+    # test) against v7 so its breaking renames can't slip through silently.
+    name: Typecheck & unit tests (AI SDK v7)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # ai@7 requires Node >= 22.
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies with AI SDK v7
+        run: | # zizmor: ignore[adhoc-packages] testing the peer range's newest major is the point
+          npm ci
+          npm install --no-save ai@^7
+          node -p "'ai@' + require('ai/package.json').version"
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
   ci-success:
     name: CI Success
-    needs: tests
+    needs: [tests, integration, ai-sdk-v7]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
