@@ -5,19 +5,26 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   tag:
     name: Create version tag
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      contents: write
+      contents: write # create the version tag through the API
     outputs:
       created: ${{ steps.tag.outputs.created }}
       version: ${{ steps.pkg.outputs.version }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The tag is created through the API below, so git never needs the token.
+          persist-credentials: false
 
       - name: Read package version
         id: pkg
@@ -26,16 +33,16 @@ jobs:
       - name: Create tag if it does not exist
         id: tag
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: v${{ steps.pkg.outputs.version }}
+          SHA: ${{ github.sha }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+          if gh api "repos/$GH_REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists — skipping."
             echo "created=false" >> "$GITHUB_OUTPUT"
           else
-            git tag "$TAG"
-            git push origin "$TAG"
+            gh api --method POST "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA"
             echo "Created and pushed tag $TAG."
             echo "created=true" >> "$GITHUB_OUTPUT"
           fi
@@ -44,9 +51,9 @@ jobs:
     name: Publish new version
     needs: tag
     if: needs.tag.outputs.created == 'true'
-    uses: ./.github/workflows/publish.yml
+    uses: $/.github/workflows/publish.yml
     permissions:
       contents: read
-      id-token: write
+      id-token: write # npm provenance in publish.yml
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
