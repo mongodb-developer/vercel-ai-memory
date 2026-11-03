@@ -782,11 +782,32 @@ Publishing to npm happens only when a GitHub Release is published; nothing else
 
 Signing needs the `release-signing` GitHub environment with the
 `AWS_SIGNING_ROLE_ARN`, `AWS_SIGNING_REGION`, and `AWS_SIGNING_SECRET_ID` secrets.
-A manual run of the workflow is a dry run: it tests, builds, and signs, but never
-publishes.
+**Run workflow** on the Actions tab is a dry run: it tests, builds, packs, and
+signs, but never publishes.
 
-**Run workflow** on the Actions tab is a dry run: it tests, builds, and packs but
-never publishes.
+### Verifying releases
+
+Every [GitHub release](https://github.com/mongodb-developer/vercel-ai-memory/releases)
+attaches the exact tarball that was published to npm, a detached armored GPG
+signature (`<tarball>.sig`), and a `SHA256SUMS` file. Signatures are made with
+MongoDB's Garasign service using this key:
+
+| | |
+|---|---|
+| Key | `ai-builder-experience <packaging@mongodb.com>` |
+| Fingerprint | `6E33 09C7 3676 2845 73EC 0E52 5994 2DBC 12A6 CD89` |
+| Public key | <https://pgp.mongodb.com/ai-builder-experience.pub> |
+
+```bash
+curl -sSLO https://pgp.mongodb.com/ai-builder-experience.pub
+gpg --import ai-builder-experience.pub
+gpg --verify mongodb-developer-vercel-ai-memory-X.Y.Z.tgz.sig \
+             mongodb-developer-vercel-ai-memory-X.Y.Z.tgz
+```
+
+Expect `Good signature from "ai-builder-experience <packaging@mongodb.com>"` and
+the fingerprint above. Compare the fingerprint against this README, not only
+against the downloaded key, so a swapped key cannot verify itself.
 
 ## License
 
