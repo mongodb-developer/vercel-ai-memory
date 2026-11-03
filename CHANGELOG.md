@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **The Vercel Eve provider (`/eve` subpath) is marked not production-ready.**
+  It is not recommended for production use and is excluded from this package's
+  semantic-versioning guarantees: the `/eve` API may change in a minor
+  release. The root AI SDK integration is unaffected.
+- The Eve provider logs a one-time notice per process on first use.
+
 ## [0.6.0] — 2026-10-06
 
 Security hardening from the product-security threat model (P0-1: finding #3
