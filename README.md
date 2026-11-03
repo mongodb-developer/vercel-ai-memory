@@ -775,9 +775,15 @@ Publishing to npm happens only when a GitHub Release is published; nothing else
 2. On GitHub, **Releases → Draft a new release**, create tag `vX.Y.Z` (matching
    `package.json`) on `main`, write the release notes, and **Publish release**.
 3. The [Release workflow](.github/workflows/release.yml) runs the tests, builds and
-   packs the tarball, publishes it to npm with provenance, and attaches the tarball
-   and `SHA256SUMS` to the release. It fails before publishing if the tag does not
+   packs the tarball, signs it with MongoDB's release key (Garasign), publishes it
+   to npm with provenance, and attaches the tarball, its detached `.sig`, and
+   `SHA256SUMS` to the release. It fails before publishing if the tag does not
    match `package.json`.
+
+Signing needs the `release-signing` GitHub environment with the
+`AWS_SIGNING_ROLE_ARN`, `AWS_SIGNING_REGION`, and `AWS_SIGNING_SECRET_ID` secrets.
+A manual run of the workflow is a dry run: it tests, builds, and signs, but never
+publishes.
 
 **Run workflow** on the Actions tab is a dry run: it tests, builds, and packs but
 never publishes.
