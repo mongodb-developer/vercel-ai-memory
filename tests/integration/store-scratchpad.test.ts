@@ -24,7 +24,7 @@ describe('ScratchpadMemory', () => {
     await store.scratchpadWrite(USER, sess, 'Note one')
     await store.scratchpadWrite(USER, sess, 'Note two')
 
-    const notes = await store.scratchpadRead(sess)
+    const notes = await store.scratchpadRead(USER, sess)
     expect(notes).toHaveLength(2)
     expect(notes.map(n => n.note)).toContain('Note one')
     expect(notes.map(n => n.note)).toContain('Note two')
@@ -38,7 +38,7 @@ describe('ScratchpadMemory', () => {
     // Promote the first note
     await store.scratchpadPromote(id.toString(), USER, 'interaction')
 
-    const notes = await store.scratchpadRead(sess)
+    const notes = await store.scratchpadRead(USER, sess)
     expect(notes).toHaveLength(1)
     expect(notes[0].note).toBe('Will stay')
   })
@@ -75,7 +75,7 @@ describe('ScratchpadMemory', () => {
     await store.scratchpadWrite(USER, sess, 'Second')
     await store.scratchpadWrite(USER, sess, 'Third')
 
-    const notes = await store.scratchpadRead(sess)
+    const notes = await store.scratchpadRead(USER, sess)
     expect(notes[0].note).toBe('First')
     expect(notes[1].note).toBe('Second')
     expect(notes[2].note).toBe('Third')

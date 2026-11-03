@@ -173,12 +173,30 @@ describe('/eve adapter — tools (#7 remember, #8 forget)', () => {
     expect(proceduralSave.mock.calls[0][0]).toBe('tenant-1')
   })
 
-  it('forget tool deletes by id+type', async () => {
+  it('forget tool deletes by id+type, scoped to the trusted scope key', async () => {
     const provider = mongodbMemory({ uri: TEST_URI, embedder: mockEmbedder }) as any
     const toolset = provider.tools(makeCtx('tenant-1'))
     const out = await toolset.forget.execute({ id: 'abc123', type: 'semantic' })
-    expect(forget).toHaveBeenCalledWith('semantic', 'abc123')
+    expect(forget).toHaveBeenCalledWith('tenant-1', 'semantic', 'abc123')
     expect(out).toMatchObject({ forgotten: true, id: 'abc123', type: 'semantic' })
+  })
+
+  it('forget tools bound to different scopes never cross principals', async () => {
+    const provider = mongodbMemory({ uri: TEST_URI, embedder: mockEmbedder }) as any
+    await provider.tools(makeCtx('alice')).forget.execute({ id: 'x1', type: 'episodic' })
+    await provider.tools(makeCtx('bob')).forget.execute({ id: 'x1', type: 'episodic' })
+    expect(forget.mock.calls.map((c) => c[0])).toEqual(['alice', 'bob'])
+  })
+
+  it('forget on a disabled tier does not touch the store', async () => {
+    const provider = mongodbMemory({
+      uri: TEST_URI,
+      embedder: mockEmbedder,
+      memory: { procedural: false },
+    }) as any
+    const out = await provider.tools(makeCtx('tenant-1')).forget.execute({ id: 'x', type: 'procedural' })
+    expect(forget).not.toHaveBeenCalled()
+    expect(out).toMatchObject({ forgotten: false })
   })
 })
 

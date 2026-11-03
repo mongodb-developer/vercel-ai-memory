@@ -34,6 +34,14 @@ cp .env.example .env.local     # then fill in GROVE_API_KEY and MONGODB_URI
 export $(grep -v '^#' .env.local | xargs)   # or use your preferred dotenv loader
 ```
 
+> **`.env.local` is for local development only** — it's gitignored; never commit
+> real values (`.env.example` holds placeholders only). Use a development-only
+> Atlas user here. When you deploy, store `MONGODB_URI` and `GROVE_API_KEY` as
+> **Vercel Secrets** in the project's environment variables (or install the
+> MongoDB Atlas Vercel integration, which sets `MONGODB_URI` for you), and
+> `eve link` / `vercel env pull .env.local` to fetch them locally. See
+> [Connection string & secrets](../../README.md#connection-string--secrets).
+
 > Once v0.5.0 is published, you can instead depend on
 > `"@mongodb-developer/vercel-ai-memory": "^0.5.0"` from npm.
 

@@ -400,6 +400,9 @@ export interface MongoDBMemoryOptions {
   /**
    * Default userId scoping when not provided at call time.
    * Can be overridden per-call: `mongodbMemory({ userId, sessionId })`
+   *
+   * Prefer passing `userId` per call, derived from your trusted, server-side
+   * auth session — never from client-supplied request data.
    */
   userId?: string
   /**
@@ -407,6 +410,15 @@ export interface MongoDBMemoryOptions {
    * Can be overridden per-call: `mongodbMemory({ userId, sessionId })`
    */
   sessionId?: string
+  /**
+   * Opt back into the legacy shared `'default'` userId / sessionId when a call
+   * supplies no scope and no creation-time default is set.
+   *
+   * **Default: `false`** — calling `mongodbMemory()` without a resolvable
+   * `userId` / `sessionId` throws, so separate end users can never silently
+   * share one memory bucket. Enable only for single-user demos / scripts.
+   */
+  allowSharedDefaultScope?: boolean
 
   /** Where data lives (db, collections, index names, disabled types). */
   topology?: TopologyOptions
@@ -438,7 +450,12 @@ export interface MemoryCallOptions {
  */
 export interface MemoryConfig {
   dbName: string
+  /**
+   * Resolved creation-time default userId. An empty string means "no default"
+   * — each call must supply its own scope (see `allowSharedDefaultScope`).
+   */
   defaultUserId: string
+  /** Resolved creation-time default sessionId (empty string = no default). */
   defaultSessionId: string
 
   /**

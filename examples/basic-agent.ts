@@ -11,7 +11,8 @@
  * Prerequisites:
  *   - MongoDB Atlas cluster with vector search enabled (M10+)
  *   - npm install @ai-sdk/openai ai zod
- *   - MONGODB_URI environment variable set
+ *   - MONGODB_URI environment variable set (local: .env.local; production:
+ *     store it as a Vercel Secret — see README "Connection string & secrets")
  *   - OPENAI_API_KEY environment variable set
  *
  * Run:
