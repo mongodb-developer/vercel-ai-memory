@@ -278,6 +278,8 @@ mongodbMemory({ uri: process.env.MONGODB_URI!, autoEmbed: { model: 'voyage-3-lar
 
 In this mode the store persists the source text (`embed_text`), bootstraps `autoEmbed` vector indexes, and issues `$vectorSearch` with a `query` string. Provide **exactly one** of `embedder` / `autoEmbed`.
 
+> ⚠️ **Warning: switching embedding modes on an existing database temporarily breaks search for your existing memories.** If you change a store from `embedder` to `autoEmbed` (or back) against data that is already there, the vector index is dropped and rebuilt, and every memory saved before the switch becomes temporarily unsearchable. Client mode indexes an `embedding` vector; auto-embed mode indexes `embed_text`. Existing documents only have the field for the mode they were written in, so they stay unsearchable until that field is backfilled, which this library does not do automatically yet. Treat the embedding mode as a one-time choice per database. If you must switch, use a new database or collection, or re-embed and backfill your existing memories first. A built-in migration helper is tracked in [#11](https://github.com/mongodb-developer/vercel-ai-memory/issues/11).
+
 A full runnable agent example lives in [`examples/auto-embed-agent.ts`](examples/auto-embed-agent.ts) — it's the auto-embedding twin of `examples/basic-agent.ts` (same multi-tenant `ToolLoopAgent`, just `autoEmbed: { model: 'voyage-4' }` instead of a client `embedder`). Run it with `npx tsx examples/auto-embed-agent.ts`.
 
 > Requires MongoDB Atlas with Voyage AI enabled for your organization. On dedicated (`M10+`) clusters, enable storage auto-scaling. See the [Automated Embedding docs](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding.md).
