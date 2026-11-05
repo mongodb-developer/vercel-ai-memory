@@ -5,7 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] — 2026-11-05
+
+First generally available release. The root AI SDK integration is stable and
+follows semantic versioning: no breaking changes without a major version bump.
+No runtime code changed since 0.6.0.
+
+**The Vercel Eve provider (`/eve` subpath) is not covered by the stability
+guarantee.** It is not production-ready and may change in a minor release.
+
+### Security
+- Release tarballs are signed with MongoDB's release key (Garasign) and
+  published with npm provenance. The tarball, detached `.sig`, and `SHA256SUMS`
+  are attached to every GitHub Release. See "Verifying releases" in the README.
+- Publishing happens only when a GitHub Release is published; merges, tag
+  pushes, and manual workflow runs never publish.
+- GitHub Actions workflows are audited by zizmor on every PR, all actions are
+  hash-pinned, and Dependabot is enabled.
 
 ### Changed
 - **The Vercel Eve provider (`/eve` subpath) is marked not production-ready.**
@@ -13,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   semantic-versioning guarantees: the `/eve` API may change in a minor
   release. The root AI SDK integration is unaffected.
 - The Eve provider logs a one-time notice per process on first use.
+
+### Documentation
+- Warning that switching embedding modes (`embedder` vs `autoEmbed`) on an
+  existing database rebuilds the vector index and leaves earlier memories
+  unsearchable until backfilled. A migration helper is tracked in #11.
 
 ## [0.6.0] — 2026-10-06
 
