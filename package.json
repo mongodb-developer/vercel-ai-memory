@@ -77,13 +77,13 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@vitest/coverage-v8": "^4.1.4",
-    "ai": "^6.0.0",
-    "mongodb": "^7.3.0",
-    "tsup": "^8.0.0",
-    "typescript": "^5.7.0",
-    "vitest": "^4.1.4",
-    "zod": "^3.25.76"
+    "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "^5.0.5",
+    "ai": "^7.0.157",
+    "mongodb": "^7.7.0",
+    "tsup": "^9.0.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5",
+    "zod": "^4.6.7"
   }
 }
