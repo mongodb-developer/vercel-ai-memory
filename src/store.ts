@@ -63,6 +63,14 @@ export class MongoMemoryStore {
   private scratchpad: Collection<ScratchpadMemory>
 
   /**
+   * Trusted, server-side scope values (e.g. `{ tenant_id: 'acme' }`) bound via
+   * {@link MongoMemoryStore.withScope}. Written on every save and applied to
+   * every read / search / update filter alongside `user_id`. Empty on the root
+   * store, which keeps the pre-1.0.1 behavior.
+   */
+  private _scope: Readonly<Record<string, string>> = {}
+
+  /**
    * Construct a store.
    *
    * Two overloads for backward compatibility:
@@ -112,6 +120,7 @@ export class MongoMemoryStore {
       disabled: new Set<MemoryType>(),
       hiddenFromTool: new Set<MemoryType>(),
       extraFilterFields: { semantic: [], procedural: [], episodic: [] },
+      requireScope: false,
       retention: {
         session: { mode: 'ttl', ttlSeconds: 86_400, field: 'created_at' },
         scratchpad: { mode: 'ttl', ttlSeconds: 3_600, field: 'created_at' },
@@ -148,6 +157,122 @@ export class MongoMemoryStore {
           '(derive it from your trusted, server-side auth context).'
       )
     }
+  }
+
+  // ─── Scope (extraFilterFields, e.g. tenant_id) ──────────────────────────────
+
+  /** Every scope field configured across `topology.extraFilterFields`. */
+  private get _scopeFields(): string[] {
+    const f = this.config.extraFilterFields
+    return [...new Set([...f.semantic, ...f.procedural, ...f.episodic])]
+  }
+
+  /**
+   * Return a view of this store bound to trusted scope values (for example
+   * `{ tenant_id: 'acme' }`). The view shares the same client, collections,
+   * and config; only the bound scope differs.
+   *
+   * On the returned view, every save writes the scope fields, and every read,
+   * search, forget, and promote filters on them in addition to `user_id`.
+   *
+   * Pass values from your trusted server-side context only, never from model
+   * or client input. Keys must be declared in `topology.extraFilterFields`;
+   * values must be non-empty strings.
+   *
+   * @example
+   * ```ts
+   * const acme = memory.store.withScope({ tenant_id: 'acme' })
+   * await acme.semanticSave('alice', 'diet', 'vegetarian')
+   * ```
+   */
+  withScope(scope: Record<string, string> | undefined): MongoMemoryStore {
+    const validated = this._validateScope(scope)
+    if (Object.keys(validated).length === 0 && Object.keys(this._scope).length === 0) {
+      return this
+    }
+    const view = Object.create(this) as MongoMemoryStore
+    view._scope = Object.freeze({ ...this._scope, ...validated })
+    return view
+  }
+
+  /** The scope values bound to this store view (empty on the root store). */
+  get scope(): Readonly<Record<string, string>> {
+    return this._scope
+  }
+
+  private _validateScope(scope: unknown): Record<string, string> {
+    if (scope === undefined || scope === null) return {}
+    if (typeof scope !== 'object' || Array.isArray(scope)) {
+      throw new Error('[mongodb-memory] `scope` must be an object of string values')
+    }
+    const allowed = new Set(this._scopeFields)
+    const out: Record<string, string> = {}
+    for (const [key, value] of Object.entries(scope as Record<string, unknown>)) {
+      if (!allowed.has(key)) {
+        throw new Error(
+          `[mongodb-memory] scope field "${key}" is not declared in ` +
+            '`topology.extraFilterFields`. Declare it so it is indexed and enforced.'
+        )
+      }
+      // Same runtime guard as _assertScope: a non-string (e.g. { $ne: null })
+      // would otherwise become a query operator that matches every tenant.
+      if (typeof value !== 'string' || value.trim() === '') {
+        throw new Error(
+          `[mongodb-memory] scope field "${key}" must be a non-empty string ` +
+            '(derive it from your trusted, server-side auth context).'
+        )
+      }
+      out[key] = value
+    }
+    return out
+  }
+
+  /**
+   * Fail closed when `topology.requireScope` is on and a configured scope
+   * field is not bound on this store view.
+   */
+  private _assertRequiredScope(): void {
+    if (!this.config.requireScope) return
+    const missing = this._scopeFields.filter((f) => !(f in this._scope))
+    if (missing.length > 0) {
+      throw new Error(
+        `[mongodb-memory] scope is required (topology.requireScope) but ` +
+          `${missing.map((m) => `"${m}"`).join(', ')} is missing. Pass it per call, ` +
+          'e.g. `mongodbMemory({ userId, sessionId, scope: { tenant_id } })` or ' +
+          '`store.withScope({ tenant_id })`.'
+      )
+    }
+  }
+
+  /**
+   * Owner filter / document fields: `{ ...scope, user_id }`. Used for every
+   * insert, upsert, and find/update filter. `user_id` is applied last.
+   */
+  private _owner(userId: string): Record<string, string> & { user_id: string } {
+    this._assertRequiredScope()
+    return { ...this._scope, user_id: userId }
+  }
+
+  /**
+   * Owner filter for `$vectorSearch`: `{ <indexed scope>: {$eq}, user_id: {$eq} }`.
+   * Scope fields not indexed for this type are returned as `post` and applied
+   * as a `$match` after `$vectorSearch`, so they're never silently dropped.
+   */
+  private _vectorOwner(
+    type: VectorMemoryType,
+    userId: string
+  ): { filter: Record<string, unknown>; post: Array<Record<string, unknown>> } {
+    this._assertRequiredScope()
+    const indexed = new Set(this.config.extraFilterFields[type])
+    const filter: Record<string, unknown> = {}
+    const unindexed: Record<string, string> = {}
+    for (const [key, value] of Object.entries(this._scope)) {
+      if (indexed.has(key)) filter[key] = { $eq: value }
+      else unindexed[key] = value
+    }
+    filter.user_id = { $eq: userId }
+    const post = Object.keys(unindexed).length > 0 ? [{ $match: unindexed }] : []
+    return { filter, post }
   }
 
   /** True when this store uses Atlas Automated Embedding (server-side vectors). */
@@ -256,15 +381,7 @@ export class MongoMemoryStore {
       await this._ensureExpireAtIndex(asDoc(this.semantic))
       await this.semantic.createIndex({ user_id: 1, name: 1, timestamp: -1 }, { background: true })
       await this.semantic.createIndex({ user_id: 1, category: 1 }, { background: true })
-      await this.semantic.createIndex(
-        { user_id: 1, name: 1, is_latest: 1 },
-        {
-          unique: true,
-          background: true,
-          name: 'semantic_latest_unique',
-          partialFilterExpression: { is_latest: true },
-        }
-      )
+      await this._ensureLatestUniqueIndex(asDoc(this.semantic), 'semantic', 'name')
     }
 
     if (this._enabled('procedural')) {
@@ -272,15 +389,7 @@ export class MongoMemoryStore {
       await this._ensureExpireAtIndex(asDoc(this.procedural))
       await this.procedural.createIndex({ user_id: 1, category: 1 }, { background: true })
       await this.procedural.createIndex({ task: 1 }, { background: true })
-      await this.procedural.createIndex(
-        { user_id: 1, task: 1, is_latest: 1 },
-        {
-          unique: true,
-          background: true,
-          name: 'procedural_latest_unique',
-          partialFilterExpression: { is_latest: true },
-        }
-      )
+      await this._ensureLatestUniqueIndex(asDoc(this.procedural), 'procedural', 'task')
     }
 
     if (this._enabled('episodic')) {
@@ -316,6 +425,67 @@ export class MongoMemoryStore {
         this.config.vectorIndexNames.episodic,
         dims,
         ['user_id', ...this.config.extraFilterFields.episodic]
+      )
+    }
+  }
+
+  /**
+   * Create the "one latest version per key" unique index for semantic /
+   * procedural memory.
+   *
+   * Without scope fields this is the original `{ user_id, <key>, is_latest }`
+   * index (`<type>_latest_unique`). When `extraFilterFields` are configured for
+   * the type, the scope fields are part of the key
+   * (`<type>_latest_unique_scoped`), so two tenants that share a `user_id` and
+   * a fact name don't collide on a duplicate key.
+   *
+   * The legacy unscoped index is never dropped automatically (fail closed, same
+   * policy as vector indexes). If it's still present, we warn with the exact
+   * command, because it blocks cross-tenant saves that share user + key.
+   */
+  private async _ensureLatestUniqueIndex(
+    collection: Collection<Document>,
+    type: 'semantic' | 'procedural',
+    key: 'name' | 'task'
+  ): Promise<void> {
+    const legacyName = `${type}_latest_unique`
+    const scopeFields = this.config.extraFilterFields[type]
+    const options = {
+      unique: true,
+      background: true,
+      partialFilterExpression: { is_latest: true },
+    }
+
+    if (scopeFields.length === 0) {
+      await collection.createIndex(
+        { user_id: 1, [key]: 1, is_latest: 1 },
+        { ...options, name: legacyName }
+      )
+      return
+    }
+
+    const spec: Record<string, 1> = {}
+    for (const f of scopeFields) spec[f] = 1
+    spec.user_id = 1
+    spec[key] = 1
+    spec.is_latest = 1
+    await collection.createIndex(spec, { ...options, name: `${legacyName}_scoped` })
+
+    let legacyExists = false
+    try {
+      legacyExists = (await collection.indexExists(legacyName)) === true
+    } catch {
+      // Best-effort introspection (collection may not exist yet).
+    }
+    if (legacyExists) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[mongodb-memory] Index "${legacyName}" on "${collection.collectionName}" ` +
+          `doesn't include the scope fields (${scopeFields.join(', ')}), so saves ` +
+          `from two tenants with the same user_id and ${key} fail with a duplicate ` +
+          `key error. "${legacyName}_scoped" was created to replace it. Drop the ` +
+          `old index once you've confirmed: ` +
+          `db.${collection.collectionName}.dropIndex("${legacyName}")`
       )
     }
   }
@@ -576,11 +746,12 @@ export class MongoMemoryStore {
       createdAt,
     })
 
+    const owner = this._owner(userId)
     await this.session.insertMany(
       turns.map((turn, i) => ({
         _id: new ObjectId(),
         session_id: sessionId,
-        user_id: userId,
+        ...owner,
         seq: baseSeq + i,
         role: turn.role,
         content: turn.content,
@@ -609,7 +780,7 @@ export class MongoMemoryStore {
     if (!this._enabled('session')) return []
     const docs = await this.session
       .find(
-        { user_id: userId, session_id: sessionId },
+        { ...this._owner(userId), session_id: sessionId },
         { projection: { embedding: 0 }, sort: { seq: -1 }, limit }
       )
       .toArray()
@@ -640,13 +811,13 @@ export class MongoMemoryStore {
     if (this.config.keepHistory) {
       // Temporal versioning: mark old docs not-latest, then insert a new one.
       await this.semantic.updateMany(
-        { user_id: userId, name },
+        { ...this._owner(userId), name },
         { $set: { is_latest: false } }
       )
 
       await this.semantic.insertOne({
         _id: new ObjectId(),
-        user_id: userId,
+        ...this._owner(userId),
         name,
         category: 'semantic',
         description,
@@ -661,7 +832,7 @@ export class MongoMemoryStore {
     } else {
       // In-place upsert: single document per (user_id, name).
       await this.semantic.updateOne(
-        { user_id: userId, name },
+        { ...this._owner(userId), name },
         {
           $set: {
             description,
@@ -674,7 +845,7 @@ export class MongoMemoryStore {
           },
           $setOnInsert: {
             _id: new ObjectId(),
-            user_id: userId,
+            ...this._owner(userId),
             name,
             category: 'semantic' as const,
             stats: defaultStats(),
@@ -692,13 +863,15 @@ export class MongoMemoryStore {
   ): Promise<SemanticMemory[]> {
     this._assertScope('userId', userId)
     if (!this._enabled('semantic')) return []
+    const owner = this._vectorOwner('semantic', userId)
     const stage = await this._vectorSearchStage('semantic', query, limit, {
-      user_id: { $eq: userId },
+      ...owner.filter,
       is_latest: { $eq: true },
     })
     const results = await this.semantic
       .aggregate<SemanticMemory>([
         stage,
+        ...owner.post,
         ...this._postFilterStages(),
         { $project: { embedding: 0 } },
       ])
@@ -737,13 +910,13 @@ export class MongoMemoryStore {
     if (this.config.keepHistory) {
       // Temporal versioning: mark old docs not-latest, then insert a new one.
       await this.procedural.updateMany(
-        { user_id: userId, task },
+        { ...this._owner(userId), task },
         { $set: { is_latest: false } }
       )
 
       await this.procedural.insertOne({
         _id: new ObjectId(),
-        user_id: userId,
+        ...this._owner(userId),
         task,
         category: 'procedural',
         description,
@@ -758,7 +931,7 @@ export class MongoMemoryStore {
     } else {
       // In-place upsert: single document per (user_id, task).
       await this.procedural.updateOne(
-        { user_id: userId, task },
+        { ...this._owner(userId), task },
         {
           $set: {
             description,
@@ -771,7 +944,7 @@ export class MongoMemoryStore {
           },
           $setOnInsert: {
             _id: new ObjectId(),
-            user_id: userId,
+            ...this._owner(userId),
             task,
             category: 'procedural' as const,
             stats: defaultStats(),
@@ -789,13 +962,15 @@ export class MongoMemoryStore {
   ): Promise<ProceduralMemory[]> {
     this._assertScope('userId', userId)
     if (!this._enabled('procedural')) return []
+    const owner = this._vectorOwner('procedural', userId)
     const stage = await this._vectorSearchStage('procedural', query, limit, {
-      user_id: { $eq: userId },
+      ...owner.filter,
       is_latest: { $eq: true },
     })
     const results = await this.procedural
       .aggregate<ProceduralMemory>([
         stage,
+        ...owner.post,
         ...this._postFilterStages(),
         { $project: { embedding: 0 } },
       ])
@@ -833,7 +1008,7 @@ export class MongoMemoryStore {
 
     await this.episodic.insertOne({
       _id: id,
-      user_id: userId,
+      ...this._owner(userId),
       event_type: eventType,
       category: 'episodic',
       description,
@@ -862,7 +1037,7 @@ export class MongoMemoryStore {
     this._assertScope('userId', userId)
     if (!this._enabled('episodic')) return false
     const doc = await this.episodic.findOne(
-      { ...filter, user_id: userId } as Filter<EpisodicMemory>,
+      { ...filter, ...this._owner(userId) } as Filter<EpisodicMemory>,
       { projection: { _id: 1 } }
     )
     return doc !== null
@@ -875,12 +1050,14 @@ export class MongoMemoryStore {
   ): Promise<EpisodicMemory[]> {
     this._assertScope('userId', userId)
     if (!this._enabled('episodic')) return []
+    const owner = this._vectorOwner('episodic', userId)
     const stage = await this._vectorSearchStage('episodic', query, limit, {
-      user_id: { $eq: userId },
+      ...owner.filter,
     })
     const results = await this.episodic
       .aggregate<EpisodicMemory>([
         stage,
+        ...owner.post,
         ...this._postFilterStages(),
         { $project: { embedding: 0 } },
       ])
@@ -909,7 +1086,7 @@ export class MongoMemoryStore {
     await this.scratchpad.insertOne({
       _id: id,
       session_id: sessionId,
-      user_id: userId,
+      ...this._owner(userId),
       note,
       promoted: false,
       created_at: createdAt,
@@ -925,7 +1102,7 @@ export class MongoMemoryStore {
     if (!this._enabled('scratchpad')) return []
     return this.scratchpad
       .find(
-        { user_id: userId, session_id: sessionId, promoted: false },
+        { ...this._owner(userId), session_id: sessionId, promoted: false },
         { sort: { created_at: 1 } }
       )
       .toArray()
@@ -947,7 +1124,7 @@ export class MongoMemoryStore {
     // note cannot both succeed.
     const doc = ObjectId.isValid(scratchpadId)
       ? await this.scratchpad.findOneAndUpdate(
-          { _id: new ObjectId(scratchpadId), user_id: userId, promoted: false },
+          { _id: new ObjectId(scratchpadId), ...this._owner(userId), promoted: false },
           { $set: { promoted: true } },
           { returnDocument: 'before' }
         )
@@ -960,14 +1137,14 @@ export class MongoMemoryStore {
     } catch (err) {
       // Release the claim so the note can be promoted again later.
       await this.scratchpad.updateOne(
-        { _id: doc._id, user_id: userId, promoted_to_id: { $exists: false } },
+        { _id: doc._id, ...this._owner(userId), promoted_to_id: { $exists: false } },
         { $set: { promoted: false } }
       )
       throw err
     }
 
     await this.scratchpad.updateOne(
-      { _id: doc._id, user_id: userId },
+      { _id: doc._id, ...this._owner(userId) },
       { $set: { promoted_to_id: episodicId } }
     )
 
@@ -999,7 +1176,7 @@ export class MongoMemoryStore {
     if (typeof id !== 'string' || !ObjectId.isValid(id)) return false
     const collection = this._collectionFor(type)
     const result = await collection.updateOne(
-      { _id: new ObjectId(id), user_id: userId } as Filter<Record<string, unknown>>,
+      { _id: new ObjectId(id), ...this._owner(userId) } as Filter<Record<string, unknown>>,
       { $set: { expire_at: new Date() } }
     )
     return result.matchedCount > 0

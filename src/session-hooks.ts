@@ -17,6 +17,11 @@ export interface SessionHookOptions {
   /** The session id to read/write. */
   sessionId: string
   /**
+   * Trusted scope values for `topology.extraFilterFields`
+   * (e.g. `{ tenant_id: 'acme' }`). Applied to session reads and writes.
+   */
+  scope?: Record<string, string>
+  /**
    * Max number of prior turns to load with `loadSession`.
    * Defaults to the store's `defaults.sessionRecentLimit` (40).
    */
@@ -84,6 +89,17 @@ function readCallContext(event: AnyOnFinishEvent): Partial<OnFinishContext> {
   return {}
 }
 
+/**
+ * Bind `scope` when one is provided. Without a scope, the store is used as-is,
+ * so custom / duck-typed stores keep working unchanged.
+ */
+function scopedStore(
+  store: MongoMemoryStore,
+  scope: Record<string, string> | undefined
+): MongoMemoryStore {
+  return scope === undefined ? store : store.withScope(scope)
+}
+
 // ─── Loader: deterministic history read ───────────────────────────────────────
 
 /**
@@ -98,7 +114,8 @@ export async function loadSession(
   store: MongoMemoryStore,
   opts: SessionHookOptions
 ): Promise<ModelMessage[]> {
-  const turns: SessionMemory[] = await store.sessionRecent(opts.userId, opts.sessionId, opts.limit)
+  const turns: SessionMemory[] = await scopedStore(store, opts.scope)
+    .sessionRecent(opts.userId, opts.sessionId, opts.limit)
   return turns.flatMap((turn) => {
     const message = sessionTurnToModelMessage(turn)
     return message ? [message] : []
@@ -133,6 +150,8 @@ function sessionTurnToModelMessage(turn: SessionMemory): ModelMessage | null {
 export interface OnFinishContext {
   userId: string
   sessionId: string
+  /** Optional trusted scope values (`extraFilterFields`, e.g. `tenant_id`). */
+  scope?: Record<string, string>
   /** Optional user prompt to persist as the leading `user` turn. */
   prompt?: string | ModelMessage[]
 }
@@ -188,6 +207,7 @@ export function createOnFinish(
 
     const userId = ctx.userId ?? opts?.userId
     const sessionId = ctx.sessionId ?? opts?.sessionId
+    const scope = ctx.scope ?? opts?.scope
     const prompt = ctx.prompt ?? opts?.prompt
 
     if (!userId || !sessionId) {
@@ -226,7 +246,7 @@ export function createOnFinish(
       }
 
       if (turns.length > 0) {
-        await store.sessionAppendMany(userId, sessionId, turns)
+        await scopedStore(store, scope).sessionAppendMany(userId, sessionId, turns)
       }
     } catch (err) {
       // Best-effort: we never want to break the generation because memory

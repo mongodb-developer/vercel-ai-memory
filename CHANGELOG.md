@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.1] — 2026-11-08
 
+### Security
+- **`extraFilterFields` (e.g. `tenant_id`) is now written and enforced**
+  ([#16](https://github.com/mongodb-developer/vercel-ai-memory/issues/16)).
+  Previously it only added filter paths to the vector search index: no save
+  wrote the field and no query filtered on it, so the README's multi-tenant
+  recipe did not isolate tenants. Now, when a trusted `scope` is passed, every
+  save writes the scope fields and every read, vector search, `forget`, and
+  `scratchpadPromote` filters on them alongside `user_id`, across all memory
+  types. Scope keys must be declared in `extraFilterFields`, and values must be
+  non-empty strings (fail closed). Isolation by `user_id` is unchanged.
+
 ### Fixed
 - **Switching embedding modes no longer silently drops the vector index**
   ([#11](https://github.com/mongodb-developer/vercel-ai-memory/issues/11)).
@@ -22,8 +33,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mongodbMemory()` options). Set it to `true` to keep the previous
   drop-and-recreate behavior.
 - README: "Switching embedding modes" migration guide.
+- `scope` per-call option on `mongodbMemory()`, `loadSession()`, and
+  `onFinish()` / `createOnFinish()` (also read from `runtimeContext` /
+  `experimental_context`), plus `store.withScope(scope)` for direct store
+  access.
+- `topology.requireScope` (default `false`): throw on any operation when the
+  `extraFilterFields` scope is not bound.
+- README: rewritten "Multi-tenant" recipe with a backfill note for existing
+  data.
 
 ### Upgrade note
+- Tenant scoping is opt-in: without `scope`, behavior is unchanged. If you
+  start passing `scope` on an existing database, backfill the scope field on
+  existing documents first (see the README "Multi-tenant" recipe), or they
+  won't match tenant-scoped queries.
+- With `extraFilterFields` configured, `bootstrap()` creates
+  `semantic_latest_unique_scoped` / `procedural_latest_unique_scoped`. If the
+  older `*_latest_unique` index exists, drop it (bootstrap logs the exact
+  command); otherwise two tenants saving the same fact name for the same
+  `userId` hit a duplicate-key error.
 - If you had already switched modes on an existing database and rely on the
   automatic index recreation, set `recreateMismatchedIndex: true` or follow the
   migration guide; otherwise startup now fails with the mismatch error.
