@@ -94,6 +94,27 @@ describe('createMongoDBMemory factory', () => {
     expect(() => memory({ userId: '', sessionId: 's' })).toThrowError(/requires/)
   })
 
+  it('validates a per-call scope at call time (#16)', async () => {
+    const tenant = createMongoDBMemory({
+      uri: TEST_URI,
+      embedder: mockEmbedder,
+      topology: { extraFilterFields: { semantic: ['tenant_id'] } },
+    })
+    try {
+      expect(() =>
+        tenant({ userId: 'alice', sessionId: 's', scope: { tenant_id: 'acme' } })
+      ).not.toThrow()
+      expect(() =>
+        tenant({ userId: 'alice', sessionId: 's', scope: { tenant_id: '' } })
+      ).toThrowError(/non-empty string/)
+      expect(() =>
+        tenant({ userId: 'alice', sessionId: 's', scope: { org_id: 'x' } })
+      ).toThrowError(/not declared/)
+    } finally {
+      await tenant.close()
+    }
+  })
+
   it('an explicitly empty per-call scope never falls back to a creation-time default', async () => {
     const withDefaults = createMongoDBMemory({
       uri: TEST_URI,

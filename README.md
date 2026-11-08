@@ -11,7 +11,7 @@ MongoDB-backed persistent memory for the [Vercel AI SDK](https://sdk.vercel.ai) 
 - 📏 **Auto-detected dimensions** — no need to configure vector dimensions; the package probes them at startup
 - ⏱️ **Flexible retention** — per-type policies: `none`, `ttl`, `ttl+importance`, or fully `dynamic` (forgetting curve)
 - 🗑️ **Agent-driven `memory_forget`** — let the model mark individual memories for immediate deletion
-- 🧩 **Multi-tenant ready** — custom collection/index names, extra filter fields (e.g. `tenant_id`), or disable types entirely
+- 🧩 **Multi-tenant ready** — enforced tenant scoping via `extraFilterFields` + a trusted per-call `scope` (e.g. `tenant_id`), custom collection/index names, or disable types entirely
 - 🔄 **Temporal versioning** — semantic and procedural memories are versioned; history is preserved
 - 🏗️ **Zero lock-in** — works with any AI SDK model and any embedding provider (VoyageAI, OpenAI, Cohere, Google, etc.)
 - 🔌 **Lazy connection** — MongoDB connects on first tool use; call `.connect()` early if you prefer
@@ -342,7 +342,8 @@ All options are passed to `createMongoDBMemory(options)`.
 | `topology.vectorIndexNames` | `Partial<Record<VectorMemoryType, string>>` | see **Index defaults** below | Override Atlas Vector Search index names |
 | `topology.disable` | `MemoryType[]` | `[]` | Disable memory types entirely — no bootstrap, tool commands removed, store methods throw |
 | `topology.hideToolCommands` | `MemoryType[]` | `[]` | Hide a memory type's commands from the tool schema, but keep its collection + store methods live (use with runtime hooks) |
-| `topology.extraFilterFields` | `Partial<Record<VectorMemoryType, string[]>>` | `{}` | Extra scalar fields to index as Atlas Search filters (e.g. `['tenant_id']`) |
+| `topology.extraFilterFields` | `Partial<Record<VectorMemoryType, string[]>>` | `{}` | Scope fields (e.g. `['tenant_id']`). Indexed as vector search filters, **written on every save and enforced on every read / search / forget / promote** when you pass `scope` per call. See [Multi-tenant](#multi-tenant--enforce-a-tenant_id-scope) |
+| `topology.requireScope` | `boolean` | `false` | Fail closed: every operation throws unless all `extraFilterFields` are bound via `scope` |
 
 **Collection defaults:**
 
@@ -437,10 +438,13 @@ createMongoDBMemory({
 })
 ```
 
-### Multi-tenant — add a `tenant_id` filter field
+### Multi-tenant — enforce a `tenant_id` scope
+
+Declare the scope field once, then bind its value **per call from your trusted
+server-side auth context**. The model never sees or controls it.
 
 ```ts
-createMongoDBMemory({
+const mongodbMemory = createMongoDBMemory({
   uri: process.env.MONGODB_URI!,
   embedder: openai.embedding('text-embedding-3-small'),
   topology: {
@@ -449,9 +453,43 @@ createMongoDBMemory({
       procedural: ['tenant_id'],
       episodic: ['tenant_id'],
     },
+    requireScope: true, // recommended: throw if a call forgets the scope
   },
 })
+
+// Per request
+const scope = { tenant_id: session.org.id }
+const agent = new ToolLoopAgent({
+  model: openai('gpt-4.1'),
+  tools: mongodbMemory({ userId: session.user.id, sessionId, scope }),
+})
+
+// Session hooks and direct store access take the same scope
+await mongodbMemory.loadSession({ userId, sessionId, scope })
+mongodbMemory.onFinish({ userId, sessionId, scope, prompt })
+await mongodbMemory.store.withScope(scope).semanticSearch(userId, 'diet')
 ```
+
+With a `scope` bound, every memory type (including session and scratchpad):
+
+- **writes** `tenant_id` on every saved document, and
+- **filters** on `tenant_id` + `user_id` for every read, vector search, `forget`, and `scratchpad_promote`.
+
+Notes:
+
+- **Opt-in.** Without `scope` (and with `requireScope: false`, the default), behavior is unchanged: isolation is by `user_id` only. Before 1.0.1, `extraFilterFields` only declared index paths and was never written or queried ([#16](https://github.com/mongodb-developer/vercel-ai-memory/issues/16)).
+- **Validation.** `scope` keys must be declared in `extraFilterFields`, and values must be non-empty strings, or the call throws.
+- **Existing data.** Documents written before you started passing `scope` have no `tenant_id`, so tenant-scoped queries won't return them. Backfill them first, for example:
+  ```js
+  // for each collection: session_memory, semantic_memory, procedural_memory, episodic_memory, scratchpad_memory
+  db.semantic_memory.updateMany(
+    { user_id: { $in: acmeUserIds }, tenant_id: { $exists: false } },
+    { $set: { tenant_id: 'acme' } }
+  )
+  ```
+- **Index refresh.** After adding a field to `extraFilterFields`, the vector search index definition must include it. `bootstrap()` creates missing indexes but doesn't update an existing one. Update it with `updateSearchIndex` in Atlas, or drop it and re-run `bootstrap()`.
+- **Latest-version unique index.** With scope fields configured, `bootstrap()` creates `semantic_latest_unique_scoped` / `procedural_latest_unique_scoped` (scope fields + `user_id` + name/task), so two tenants can store the same fact name for the same `userId`. If the older unscoped `*_latest_unique` index exists, bootstrap logs a warning with the `dropIndex` command. It's never dropped automatically.
+- **Vercel Eve.** The `/eve` provider (not production-ready) doesn't accept `scope` yet. Use a distinct Eve scope key per tenant.
 
 ### Session-only — disable everything else
 
@@ -558,6 +596,8 @@ tools: mongodbMemory({ userId: session.user.id, sessionId }) // from verified au
 ```
 
 Both `userId` and `sessionId` are **required** (per call, or as creation-time defaults). Calling `mongodbMemory()` with no resolvable scope throws — separate users can never silently share a bucket. For single-user demos only, opt back into the legacy shared `'default'` scope with `createMongoDBMemory({ ..., allowSharedDefaultScope: true })`.
+
+Optionally pass `scope` (e.g. `{ tenant_id }`) to enforce the fields declared in `topology.extraFilterFields`. See [Multi-tenant](#multi-tenant--enforce-a-tenant_id-scope).
 
 ### `mongodbMemory.connect()`
 

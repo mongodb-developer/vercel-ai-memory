@@ -311,10 +311,30 @@ export interface TopologyOptions {
    */
   hideToolCommands?: MemoryType[]
   /**
-   * Extra scalar filter fields to index in the vector search index for a
-   * given memory type (e.g. `['tenant_id']` for multi-tenant setups).
+   * Extra scalar scope fields (e.g. `['tenant_id']` for multi-tenant setups)
+   * per vector memory type.
+   *
+   * Each field is:
+   * - indexed as a `filter` path in that type's Atlas Vector Search index,
+   * - **written** on every save, from the trusted per-call `scope`
+   *   (`mongodbMemory({ userId, sessionId, scope: { tenant_id } })` or
+   *   `store.withScope({ tenant_id })`), and
+   * - **enforced** on every read, search, forget, and promote, alongside
+   *   `user_id`, across all memory types.
+   *
+   * Enforcement is opt-in per call: when no `scope` is passed, behavior is
+   * unchanged (`user_id` only). Set {@link TopologyOptions.requireScope} to
+   * fail closed instead.
    */
   extraFilterFields?: Partial<Record<VectorMemoryType, string[]>>
+  /**
+   * When `true`, every store operation throws unless all `extraFilterFields`
+   * are bound through `scope`. Use it in multi-tenant deployments so a
+   * forgotten `scope` can never fall back to `user_id`-only isolation.
+   *
+   * Default: `false`.
+   */
+  requireScope?: boolean
   /**
    * When `true`, semantic and procedural saves keep a full version history
    * (each save inserts a new document, old ones are marked `is_latest: false`).
@@ -452,6 +472,15 @@ export interface MemoryCallOptions {
   userId?: string
   /** Session identifier — scopes session & scratchpad operations */
   sessionId?: string
+  /**
+   * Trusted scope values for the fields declared in
+   * `topology.extraFilterFields`, e.g. `{ tenant_id: 'acme' }`. Written on
+   * every save and enforced on every read / search / forget / promote.
+   *
+   * Derive these from your server-side auth context only. The model never
+   * sees or controls them.
+   */
+  scope?: Record<string, string>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -494,6 +523,8 @@ export interface MemoryConfig {
    */
   hiddenFromTool: Set<MemoryType>
   extraFilterFields: Record<VectorMemoryType, string[]>
+  /** Fail closed when any `extraFilterFields` value is not bound via `scope`. */
+  requireScope: boolean
 
   retention: Required<{
     session: DecayPolicy

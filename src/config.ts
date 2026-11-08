@@ -192,6 +192,7 @@ export function resolveConfig(
     disabled,
     hiddenFromTool,
     extraFilterFields,
+    requireScope: options.topology?.requireScope === true,
     retention,
     keepHistory: options.topology?.keepHistory ?? false,
     filtering,

@@ -211,9 +211,13 @@ export function createMongoDBMemory(options: MongoDBMemoryOptions): MongoDBMemor
       )
     }
 
+    // Bind the trusted per-call scope (extraFilterFields, e.g. tenant_id).
+    // Validated here so a bad scope fails at call time, not on first tool use.
+    const scoped = store.withScope(callOptions?.scope)
+
     // Pass ensureConnected as the onBeforeExecute hook for lazy bootstrap.
     // The config lets the tool tailor its command enum to the enabled types.
-    const memoryTool = buildMemoryTool(store, userId, sessionId, ensureConnected, config)
+    const memoryTool = buildMemoryTool(scoped, userId, sessionId, ensureConnected, config)
 
     return { memory: memoryTool }
   }
