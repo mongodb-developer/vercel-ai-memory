@@ -1,6 +1,6 @@
 {
   "name": "@mongodb-developer/vercel-ai-memory",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MongoDB-backed persistent memory provider for the Vercel AI SDK (plus a Vercel Eve provider that is not yet production-ready) — Session, Semantic, Procedural, Episodic, and Scratchpad memory with Atlas Vector Search (optional Atlas Automated Embedding).",
   "keywords": [
     "mongodb",

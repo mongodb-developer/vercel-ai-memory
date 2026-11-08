@@ -186,6 +186,7 @@ export function resolveConfig(
     defaultUserId: options.userId ?? sharedDefault,
     defaultSessionId: options.sessionId ?? sharedDefault,
     autoEmbed,
+    recreateMismatchedIndex: options.recreateMismatchedIndex === true,
     collections,
     vectorIndexNames,
     disabled,

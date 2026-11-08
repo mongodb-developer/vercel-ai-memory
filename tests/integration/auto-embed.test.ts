@@ -108,7 +108,7 @@ suite('Atlas Automated Embedding — root AI SDK integration', () => {
     // every run (~40s+ of async provisioning, longer for autoEmbed because the
     // Voyage pipeline must be set up too). With deleteMany the indexes are
     // already READY on re-runs. If a stale index of the wrong type is ever left
-    // behind, the store's bootstrap self-heals it (drop + recreate).
+    // behind, bootstrap throws (see index-mismatch.test.ts); drop the collection.
     const db = client.db(AUTO_DB)
     for (const name of VECTOR_COLLECTIONS) {
       await db.collection(name).deleteMany({}).catch(() => {

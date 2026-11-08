@@ -86,6 +86,7 @@ export function mongodbMemory(
     uri: options.uri,
     embedder: options.embedder,
     autoEmbed: options.autoEmbed,
+    recreateMismatchedIndex: options.recreateMismatchedIndex,
     topology: {
       dbName: options.dbName,
       disable,

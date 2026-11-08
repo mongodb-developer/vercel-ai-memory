@@ -72,6 +72,12 @@ export interface EveMongoMemoryOptions {
    * one of `embedder` / `autoEmbed`.
    */
   autoEmbed?: AutoEmbedOptions
+  /**
+   * Opt-in: drop & recreate a vector index whose type mismatches the embedding
+   * mode. Default `false` — bootstrap throws instead. See the README section
+   * "Switching embedding modes".
+   */
+  recreateMismatchedIndex?: boolean
 
   /**
    * Database name. Default: `'agent_memory'`.
