@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] — 2026-11-08
+
+### Fixed
+- **Switching embedding modes no longer silently drops the vector index**
+  ([#11](https://github.com/mongodb-developer/vercel-ai-memory/issues/11)).
+  When an existing vector search index has a different type than the current
+  mode (client `vector` vs Atlas `autoEmbed`), `bootstrap()` now throws an
+  error that names the collection, index, existing type, and desired type, and
+  links to the migration guide. Previously it dropped and recreated the index,
+  which left every memory written in the old mode unsearchable while writes
+  kept succeeding.
+
+### Added
+- `recreateMismatchedIndex` option (default `false`, also on the Eve
+  `mongodbMemory()` options). Set it to `true` to keep the previous
+  drop-and-recreate behavior.
+- README: "Switching embedding modes" migration guide.
+
+### Upgrade note
+- If you had already switched modes on an existing database and rely on the
+  automatic index recreation, set `recreateMismatchedIndex: true` or follow the
+  migration guide; otherwise startup now fails with the mismatch error.
+
 ## [1.0.0] — 2026-11-05
 
 First generally available release. The root AI SDK integration is stable and

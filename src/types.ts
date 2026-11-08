@@ -393,6 +393,20 @@ export interface MongoDBMemoryOptions {
    */
   autoEmbed?: AutoEmbedOptions
   /**
+   * What to do when an existing vector search index has a different type than
+   * the current embedding mode (client `vector` vs Atlas `autoEmbed`).
+   *
+   * - `false` (default): never touch the index; bootstrap throws an actionable
+   *   error. Switching modes leaves earlier memories without the field the new
+   *   index uses, so they would be silently unsearchable.
+   * - `true`: drop and recreate the index (the pre-0.7 behavior). Search is
+   *   unavailable while Atlas rebuilds it, and older documents stay unsearchable
+   *   until you backfill the new field yourself.
+   *
+   * See the README section "Switching embedding modes".
+   */
+  recreateMismatchedIndex?: boolean
+  /**
    * Database name. Default: `'agent_memory'`.
    * @deprecated Prefer `topology.dbName`. Kept for backward compatibility.
    */
@@ -465,6 +479,9 @@ export interface MemoryConfig {
    * a `$vectorSearch` `query` string instead of a client `queryVector`.
    */
   autoEmbed: AutoEmbedOptions | null
+
+  /** Opt-in: drop & recreate a vector index whose type mismatches the mode. */
+  recreateMismatchedIndex: boolean
 
   collections: Record<MemoryType, string>
   vectorIndexNames: Record<VectorMemoryType, string>

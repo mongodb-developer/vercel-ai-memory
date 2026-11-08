@@ -278,13 +278,39 @@ mongodbMemory({ uri: process.env.MONGODB_URI!, autoEmbed: { model: 'voyage-3-lar
 
 In this mode the store persists the source text (`embed_text`), bootstraps `autoEmbed` vector indexes, and issues `$vectorSearch` with a `query` string. Provide **exactly one** of `embedder` / `autoEmbed`.
 
-> ⚠️ **Warning: switching embedding modes on an existing database temporarily breaks search for your existing memories.** If you change a store from `embedder` to `autoEmbed` (or back) against data that is already there, the vector index is dropped and rebuilt, and every memory saved before the switch becomes temporarily unsearchable. Client mode indexes an `embedding` vector; auto-embed mode indexes `embed_text`. Existing documents only have the field for the mode they were written in, so they stay unsearchable until that field is backfilled, which this library does not do automatically yet. Treat the embedding mode as a one-time choice per database. If you must switch, use a new database or collection, or re-embed and backfill your existing memories first. A built-in migration helper is tracked in [#11](https://github.com/mongodb-developer/vercel-ai-memory/issues/11).
+Treat the embedding mode as a one-time choice per database. See [Switching embedding modes](#switching-embedding-modes) before changing it on existing data.
 
 A full runnable agent example lives in [`examples/auto-embed-agent.ts`](examples/auto-embed-agent.ts) — it's the auto-embedding twin of `examples/basic-agent.ts` (same multi-tenant `ToolLoopAgent`, just `autoEmbed: { model: 'voyage-4' }` instead of a client `embedder`). Run it with `npx tsx examples/auto-embed-agent.ts`.
 
 > Requires MongoDB Atlas with Voyage AI enabled for your organization. On dedicated (`M10+`) clusters, enable storage auto-scaling. See the [Automated Embedding docs](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding.md).
 
 > **Verifying it works.** An Atlas-gated integration test exercises this path end-to-end (`tests/integration/auto-embed.test.ts`): it bootstraps `type:"autoEmbed"` indexes (model `voyage-4`, path `embed_text`), asserts each `*Save` persists `embed_text` (and no client `embedding` array), and confirms each `*Search` ranks the relevant doc via server-side embeddings — including through the AI SDK `memory` tool. Run it with `MONGODB_URI="mongodb+srv://…" npm run test:integration`. It runs against an isolated database (`agent_memory_autoembed_test`) so its `autoEmbed` indexes never collide with the default client-mode `vector` indexes. If Voyage AI / Automated Embedding (Preview) is **not** enabled for your org, `createSearchIndexes` fails — the store logs `[mongodb-memory] Failed to create vector index …`, and the index/search assertions are skipped with a clear reason (the persistence assertions still run).
+
+### Switching embedding modes
+
+Client mode indexes an `embedding` vector; auto-embed mode indexes `embed_text`. Each document only has the field for the mode it was written in. If you change a store from `embedder` to `autoEmbed` (or back) against data that already exists, the old documents lack the field the new index uses and become unsearchable. Writes keep succeeding, so nothing looks broken.
+
+To prevent this, **bootstrap refuses to start when an existing vector index does not match the current mode.** It never drops the index on its own; it throws:
+
+```
+[mongodb-memory] Vector index "semantic_vector_index" on "semantic_memory" is type "vector"
+but this store is in "autoEmbed" mode. Refusing to drop it: ...
+```
+
+The error names the collection, the index, the existing type, and the desired type. Pick one of these migration paths:
+
+1. **Start fresh in the new mode.** Point the store at a new database (`topology.dbName`) or new collection and index names (`topology.collections`, `topology.vectorIndexNames`). Old memories stay where they are.
+2. **Backfill, then recreate the index.** Add the missing field to existing documents, then drop the old search index and let bootstrap create the new one. The text each type embeds is:
+
+   | Type | Text |
+   |------|------|
+   | semantic | `` `${name}: ${description}` `` |
+   | procedural | `` `${task}: ${description}` `` |
+   | episodic | `` `${event_type}: ${description}` `` |
+
+   - To `autoEmbed`: set `embed_text` to that text (no API calls; Atlas embeds it).
+   - To client mode: embed that text with your `embedder` and set `embedding`.
+3. **Opt in to drop-and-recreate.** Set `recreateMismatchedIndex: true` to restore the pre-1.0.1 behavior: the store logs a warning, drops the mismatched index, and creates one for the current mode. Search is unavailable while Atlas rebuilds the index, and documents written in the old mode stay unsearchable until you backfill them (step 2).
 
 ## Configuration
 
@@ -298,6 +324,8 @@ All options are passed to `createMongoDBMemory(options)`.
 | `embedder` | `EmbeddingModel` | ✅ | — | Any Vercel AI SDK embedding model |
 | `userId` | `string` | — | *(none)* | Default userId (override per-call). Required per call if unset. |
 | `sessionId` | `string` | — | *(none)* | Default sessionId (override per-call). Required per call if unset. |
+| `autoEmbed` | `AutoEmbedOptions` | — | *(none)* | Use Atlas Automated Embedding instead of `embedder`. See [Atlas Automated Embedding](#atlas-automated-embedding-opt-in) |
+| `recreateMismatchedIndex` | `boolean` | — | `false` | Drop and recreate a vector index whose type doesn't match the embedding mode. When `false`, bootstrap throws instead. See [Switching embedding modes](#switching-embedding-modes) |
 | `allowSharedDefaultScope` | `boolean` | — | `false` | Demo-only: fall back to a shared `'default'` userId/sessionId when none is supplied |
 | `dbName` | `string` | — | `'agent_memory'` | Database name. *(Deprecated — prefer `topology.dbName`.)* |
 | `topology` | `TopologyOptions` | — | `{}` | Where data lives — db, collections, indexes, disabled types |

@@ -35,6 +35,8 @@ function defaultStats(): UsageStats {
 
 /** TTL index name convention for the always-on expire_at index. */
 const EXPIRE_AT_INDEX_NAME = 'expire_at_ttl'
+const MIGRATION_DOCS_URL =
+  'https://github.com/mongodb-developer/vercel-ai-memory#switching-embedding-modes'
 
 /** All valid memory types — used to reject unknown types at the store boundary. */
 const MEMORY_TYPES: readonly MemoryType[] = [
@@ -94,6 +96,7 @@ export class MongoMemoryStore {
       defaultUserId: 'default',
       defaultSessionId: 'default',
       autoEmbed: null,
+      recreateMismatchedIndex: false,
       collections: {
         session: 'session_memory',
         semantic: 'semantic_memory',
@@ -395,19 +398,35 @@ export class MongoMemoryStore {
         }
 
     // If an index with this name already exists, check whether it matches the
-    // desired mode. A stale index of the wrong type (e.g. a client-mode
-    // `vector` index left over from a previous run when we now want
-    // `autoEmbed`) would otherwise silently shadow the correct one — the docs
-    // would still be written, but queries would never match. Detect and fix it.
+    // desired mode. A stale index of the wrong type would silently shadow the
+    // correct one. Detect it, and fail loudly unless the developer opted in to
+    // drop-and-recreate (`recreateMismatchedIndex`).
     const existingType = await this._existingVectorFieldType(collection, indexName)
     if (existingType) {
       if (existingType === desiredType) return // already correct — nothing to do
-      // Wrong type for the current embedding mode. Recreate it.
+      const detail =
+        `Vector index "${indexName}" on "${collection}" is type "${existingType}" ` +
+        `but this store is in "${desiredType}" mode.`
+      if (!this.config.recreateMismatchedIndex) {
+        // Fail closed: never drop a search index without explicit opt-in.
+        throw new Error(
+          `[mongodb-memory] ${detail} Refusing to drop it: memories written in the ` +
+            `previous mode lack the field the new index uses ("${this._vectorPath}") ` +
+            `and would become silently unsearchable. To migrate, either point this ` +
+            `store at a new collection / index name (\`topology.collections\` / ` +
+            `\`topology.vectorIndexNames\`), or backfill "${this._vectorPath}" on existing ` +
+            `documents and recreate the index manually. To restore the old ` +
+            `drop-and-recreate behavior, set \`recreateMismatchedIndex: true\`. ` +
+            `See ${MIGRATION_DOCS_URL}`
+        )
+      }
+      // Explicit opt-in: drop and recreate.
       // eslint-disable-next-line no-console
       console.warn(
-        `[mongodb-memory] Vector index "${indexName}" on "${collection}" is ` +
-          `type "${existingType}" but this store is in "${desiredType}" mode. ` +
-          `Dropping and recreating it.`
+        `[mongodb-memory] ${detail} Dropping and recreating it ` +
+          `(recreateMismatchedIndex: true). Search is unavailable during the ` +
+          `rebuild and older documents stay unsearchable until "${this._vectorPath}" ` +
+          `is backfilled. See ${MIGRATION_DOCS_URL}`
       )
       try {
         await this.db.command({ dropSearchIndex: collection, name: indexName })
