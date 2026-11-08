@@ -143,7 +143,7 @@ suite('Eve provider — full integration over Atlas Automated Embedding', () => 
     await client.connect()
 
     // Clear DATA but keep collections (and their autoEmbed indexes) so re-runs
-    // don't pay the ~40s+ index rebuild. Bootstrap self-heals a wrong-type index.
+    // don't pay the ~40s+ index rebuild. A wrong-type index makes bootstrap throw.
     const db = client.db(AUTO_DB)
     for (const name of VECTOR_COLLECTIONS) {
       await db.collection(name).deleteMany({}).catch(() => {})
